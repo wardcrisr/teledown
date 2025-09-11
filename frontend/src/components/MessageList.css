@@ -1,0 +1,714 @@
+.message-list {
+  height: 100%;
+  overflow-y: auto;
+  background: #f5f5f5;
+  position: relative;
+}
+
+.message-list.loading,
+.message-list.error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+}
+
+.loading-spinner {
+  color: #666;
+  font-size: 16px;
+}
+
+.load-more-container {
+  text-align: center;
+  padding: 20px;
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  background: linear-gradient(to top, #f5f5f5 0%, transparent 100%);
+}
+
+.load-newer-container {
+  text-align: center;
+  padding: 20px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: linear-gradient(to bottom, #f5f5f5 0%, transparent 100%);
+}
+
+.loading-more {
+  padding: 10px;
+  color: #666;
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 20px;
+  display: inline-block;
+}
+
+.loading-newer {
+  padding: 10px;
+  color: #666;
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 20px;
+  display: inline-block;
+}
+
+.load-more-button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 10px 24px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+}
+
+.load-more-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.6);
+}
+
+.load-more-button:active {
+  transform: translateY(0);
+}
+
+.load-newer-button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 10px 24px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+}
+
+.load-newer-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.6);
+}
+
+.load-newer-button:active {
+  transform: translateY(0);
+}
+
+.messages-container {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.no-messages {
+  text-align: center;
+  padding: 40px;
+  color: #999;
+  font-size: 16px;
+}
+
+/* Date divider */
+.message-date-divider {
+  text-align: center;
+  margin: 20px 0 10px;
+  position: relative;
+}
+
+.message-date-divider span {
+  background: #e0e0e0;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  color: #666;
+  display: inline-block;
+}
+
+/* Message item */
+.message-item {
+  background: white;
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: box-shadow 0.2s;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.message-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Text messages */
+.text-message p {
+  margin: 0;
+  color: #2d3748;
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Photo messages */
+.photo-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.photo-container {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f0f0f0;
+  min-height: 200px;
+  max-width: 100%;
+}
+
+.photo-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 8px;
+  max-height: 400px;
+  object-fit: contain;
+  background: #f0f0f0;
+}
+
+.photo-placeholder {
+  background: linear-gradient(135deg, #f0f0f0 0%, #e0e0e0 100%);
+  border-radius: 8px;
+  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 200px;
+}
+
+.media-icon {
+  font-size: 32px;
+}
+
+.media-label {
+  color: #666;
+  font-size: 14px;
+}
+
+.photo-dimensions {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-top: 4px;
+  color: #666;
+}
+
+.photo-size {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-top: 2px;
+  color: #666;
+}
+
+/* Video messages */
+.video-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.video-preview {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: white;
+  position: relative;
+}
+
+.video-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.video-title {
+  font-weight: 500;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.video-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.duration::before {
+  content: '⏱ ';
+}
+
+.size::before {
+  content: '💾 ';
+}
+
+/* Download buttons container */
+.download-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Base styles for download buttons */
+.btn-download-single, 
+.btn-download-batch {
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid white;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+/* Single download button (primary) */
+.btn-download-single {
+  background: rgba(74, 144, 226, 0.8);
+  border-color: #4A90E2;
+}
+
+.btn-download-single:hover:not(:disabled) {
+  background: rgba(74, 144, 226, 1);
+  transform: scale(1.1);
+}
+
+/* Batch download button (secondary) */
+.btn-download-batch {
+  background: rgba(156, 39, 176, 0.8);
+  border-color: #9C27B0;
+}
+
+.btn-download-batch:hover:not(:disabled) {
+  background: rgba(156, 39, 176, 1);
+  transform: scale(1.1);
+}
+
+/* Disabled state for both buttons */
+.btn-download-single:disabled,
+.btn-download-batch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Audio messages */
+.audio-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.audio-preview {
+  background: linear-gradient(135deg, #ff6b6b 0%, #ffd93d 100%);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: white;
+}
+
+.audio-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.audio-title {
+  font-weight: 500;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Document messages */
+.document-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.document-preview {
+  background: linear-gradient(135deg, #4a90e2 0%, #7b68ee 100%);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: white;
+}
+
+.document-name {
+  flex: 1;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Message caption */
+.message-caption {
+  margin: 0;
+  color: #4a5568;
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Message footer */
+.message-footer {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
+}
+
+.message-time {
+  color: #999;
+}
+
+.message-views {
+  color: #999;
+}
+
+/* Search Bar */
+.search-bar-container {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: white;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-toggle-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.3s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-toggle-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.search-bar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  animation: slideIn 0.3s;
+}
+
+.search-input {
+  flex: 1;
+  padding: 10px 15px;
+  border: 2px solid #e5e7eb;
+  border-radius: 25px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.3s;
+}
+
+.search-input:focus {
+  border-color: #667eea;
+}
+
+.search-button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.search-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.search-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.search-results-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+}
+
+.search-results-count {
+  font-size: 14px;
+  color: #666;
+  font-weight: 500;
+}
+
+.search-nav-btn, .search-clear-btn {
+  background: #f3f4f6;
+  border: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-nav-btn:hover, .search-clear-btn:hover {
+  background: #e5e7eb;
+  transform: scale(1.1);
+}
+
+.search-clear-btn {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.search-clear-btn:hover {
+  background: #fecaca;
+}
+
+/* Highlighted message */
+.message-item.highlighted {
+  background: #fef3c7 !important;
+  border: 2px solid #f59e0b;
+  animation: highlight 1s ease-in-out;
+}
+
+@keyframes highlight {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 0 20px 10px rgba(245, 158, 11, 0.3);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Scrollbar styling */
+.message-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.message-list::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.message-list::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.message-list::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .messages-container {
+    padding: 5px;
+  }
+  
+  .message-item {
+    padding: 10px;
+  }
+  
+  .video-preview,
+  .audio-preview,
+  .document-preview {
+    padding: 10px;
+  }
+}
+
+/* Image Modal */
+.image-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.image-modal-content {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.image-modal-content img {
+  max-width: 100%;
+  max-height: 85vh;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.modal-close {
+  position: absolute;
+  top: -40px;
+  right: 0;
+  background: none;
+  border: none;
+  color: white;
+  font-size: 36px;
+  cursor: pointer;
+  padding: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  transition: opacity 0.2s;
+}
+
+.modal-close:hover {
+  opacity: 1;
+}
+
+.modal-caption {
+  color: white;
+  margin-top: 10px;
+  padding: 10px;
+  max-width: 600px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.modal-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  font-size: 48px;
+  cursor: pointer;
+  padding: 0;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.modal-nav:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-50%) scale(1.1);
+}
+
+.modal-prev {
+  left: 20px;
+}
+
+.modal-next {
+  right: 20px;
+}
+
+.modal-counter {
+  position: absolute;
+  top: -40px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: white;
+  font-size: 14px;
+  opacity: 0.8;
+}

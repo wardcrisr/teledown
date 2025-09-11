@@ -1,0 +1,130 @@
+.login-form-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 500px;
+}
+
+.login-form {
+  width: 100%;
+  max-width: 400px;
+  padding: 40px;
+}
+
+.login-form h2 {
+  text-align: center;
+  color: #2d3748;
+  margin-bottom: 10px;
+}
+
+.subtitle {
+  text-align: center;
+  color: #718096;
+  margin-bottom: 30px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 5px;
+  color: #4a5568;
+  font-weight: 500;
+}
+
+.form-group small {
+  display: block;
+  margin-top: 5px;
+  color: #718096;
+  font-size: 12px;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.mt-10 {
+  margin-top: 10px;
+}
+
+.error-message {
+  background: #fed7d7;
+  color: #c53030;
+  padding: 10px;
+  border-radius: 5px;
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+
+.divider {
+  text-align: center;
+  margin: 30px 0;
+  color: #cbd5e0;
+  position: relative;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 45%;
+  height: 1px;
+  background: #e2e8f0;
+}
+
+.divider::before {
+  left: 0;
+}
+
+.divider::after {
+  right: 0;
+}
+
+.alternative-login {
+  text-align: center;
+}
+
+.alternative-login h3 {
+  color: #4a5568;
+  font-size: 16px;
+  margin-bottom: 10px;
+}
+
+.alternative-login p {
+  color: #718096;
+  font-size: 14px;
+  margin-bottom: 15px;
+}
+
+.loading {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid #3498db;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.login-choice {
+  padding: 20px 0;
+}
+
+.qr-login {
+  padding: 20px 0;
+}
+
+.help-text {
+  text-align: left;
+  line-height: 1.5;
+}
