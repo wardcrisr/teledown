@@ -7,9 +7,10 @@ require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
+const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
 const io = socketIo(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: allowedOrigin,
     methods: ["GET", "POST"]
   }
 });
@@ -46,6 +47,14 @@ io.on('connection', (socket) => {
 
 // Make io available globally for other modules
 global.io = io;
+
+// Serve frontend (production) from frontend/dist
+const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
+app.use(express.static(frontendDist));
+// SPA fallback: only for non-API and non-socket paths (Express 5 safe)
+app.get(/^(?!\/api|\/socket\.io).*/, (req, res) => {
+  res.sendFile(path.join(frontendDist, 'index.html'));
+});
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

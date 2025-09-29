@@ -28,6 +28,22 @@ class TelegramService {
     this.initPromise = this.initialize();
   }
 
+  // Resolve channel entity safely (handles restarts and cache misses)
+  async resolveChannelEntity(client, channelId) {
+    const idNum = parseInt(channelId);
+    const target = idNum > 0 ? -Math.abs(idNum) : idNum;
+    try {
+      return await client.getEntity(target);
+    } catch (e) {
+      try {
+        await client.getDialogs();
+        return await client.getEntity(target);
+      } catch (_) {
+        throw new Error('CHAT_ID_INVALID');
+      }
+    }
+  }
+
   async initialize() {
     try {
       // Wait a bit to ensure sessionStore is initialized
@@ -168,7 +184,8 @@ class TelegramService {
         client,
         session,
         authenticated: false,
-        stringSession
+        stringSession,
+        lastAuthError: null
       });
 
       return client;
@@ -494,6 +511,7 @@ class TelegramService {
           return password;
         },
         onError: (err) => {
+try {            const parsed = this.parseTelegramError(err);            sessionData.lastAuthError = parsed;          } catch (_) {}
           console.error('Auth error:', err);
           throw err;
         },
@@ -503,6 +521,7 @@ class TelegramService {
       sessionData.authenticated = true;
       sessionData.stringSession = client.session.save();
       sessionData.user = await client.getMe();
+sessionData.lastAuthError = null;
       
       // Save to persistent storage
       await sessionStore.set(sessionId, {
@@ -520,6 +539,10 @@ class TelegramService {
       });
 
     } catch (error) {
+try {
+        const parsed = this.parseTelegramError(error);
+        if (sessionData) sessionData.lastAuthError = parsed;
+      } catch (_) {}
       console.error('Start auth error:', error);
       throw error;
     }
@@ -541,6 +564,58 @@ class TelegramService {
         promises.password.resolve(password);
       }
 
+      // Fast-path: try direct RPC sign in to avoid client.start timeouts
+      try {
+        const sessionData = this.sessions.get(sessionId);
+        const client = sessionData?.client;
+        if (!client) throw new Error('Client not initialized');
+        if (!sessionData.phoneCodeHash) throw new Error('Code not requested or expired');
+
+        const auth = await client.invoke(new Api.auth.SignIn({
+          phoneNumber,
+          phoneCodeHash: sessionData.phoneCodeHash,
+          phoneCode: code,
+        }));
+
+        // If no exception, sign-in succeeded
+        sessionData.authenticated = true;
+        sessionData.stringSession = client.session.save();
+        sessionData.user = await client.getMe();
+        sessionData.lastAuthError = null;
+
+        await sessionStore.set(sessionId, {
+          authenticated: true,
+          stringSession: sessionData.stringSession,
+          user: {
+            id: sessionData.user.id?.toString(),
+            firstName: sessionData.user.firstName,
+            lastName: sessionData.user.lastName,
+            username: sessionData.user.username,
+            phone: sessionData.user.phone
+          },
+          authMethod: 'phone',
+          lastUpdated: Date.now()
+        });
+
+        return {
+          success: true,
+          user: sessionData.user,
+          sessionString: sessionData.stringSession
+        };
+      } catch (e) {
+        const parsed = this.parseTelegramError(e);
+        if (parsed.code == 'SESSION_PASSWORD_NEEDED') {
+          const err = new Error('Two-factor authentication password required');
+          err.code = 'SESSION_PASSWORD_NEEDED';
+          throw err;
+        }
+        const err = new Error(parsed.message || 'Authentication failed');
+        err.code = parsed.code;
+        if (parsed.retryAfter) err.retryAfter = parsed.retryAfter;
+        throw err;
+      }
+
+      // If direct RPC path above did not return (should have thrown), fallback to client.start-based wait
       // Wait a moment for authentication to complete
       let attempts = 0;
       const maxAttempts = 30; // 15 seconds max wait
@@ -555,6 +630,7 @@ class TelegramService {
           };
         }
         
+if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.lastAuthError.message || 'Authentication failed'); e.code = sessionData.lastAuthError.code; if (sessionData.lastAuthError.retryAfter) e.retryAfter = sessionData.lastAuthError.retryAfter; throw e; }
         await new Promise(resolve => setTimeout(resolve, 500));
         attempts++;
       }
@@ -596,6 +672,7 @@ class TelegramService {
           };
         }
         
+if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.lastAuthError.message || 'Authentication failed'); e.code = sessionData.lastAuthError.code; if (sessionData.lastAuthError.retryAfter) e.retryAfter = sessionData.lastAuthError.retryAfter; throw e; }
         await new Promise(resolve => setTimeout(resolve, 500));
         attempts++;
       }
@@ -663,10 +740,7 @@ class TelegramService {
       }
 
       const { client } = sessionData;
-      
-      // Convert positive channel IDs to negative (Telegram requires negative IDs for channels/groups)
-      const channelIdNum = parseInt(channelId);
-      const properChannelId = channelIdNum > 0 ? -Math.abs(channelIdNum) : channelIdNum;
+      const entity = await this.resolveChannelEntity(client, channelId);
       
       // Build options for getMessages
       const options = { limit };
@@ -681,7 +755,7 @@ class TelegramService {
       }
       // If neither minId nor offsetId, get latest messages
       
-      const messages = await client.getMessages(properChannelId, options);
+      const messages = await client.getMessages(entity, options);
 
       // Process all messages (not just media messages)
       const mediaMessages = messages
@@ -773,12 +847,8 @@ class TelegramService {
       }
 
       const { client } = sessionData;
-      
-      // Convert positive channel IDs to negative (Telegram requires negative IDs for channels/groups)
-      const channelIdNum = parseInt(channelId);
-      const properChannelId = channelIdNum > 0 ? -Math.abs(channelIdNum) : channelIdNum;
-      
-      const messages = await client.getMessages(properChannelId, { 
+      const entity = await this.resolveChannelEntity(client, channelId);
+      const messages = await client.getMessages(entity, { 
         ids: [parseInt(messageId)] 
       });
       const message = messages[0];
@@ -812,15 +882,12 @@ class TelegramService {
       }
 
       const { client } = sessionData;
-      
-      // Convert positive channel IDs to negative
-      const channelIdNum = parseInt(channelId);
-      const properChannelId = channelIdNum > 0 ? -Math.abs(channelIdNum) : channelIdNum;
+      const entity = await this.resolveChannelEntity(client, channelId);
       
       // Search messages using Telegram's search API
       const result = await client.invoke(
         new Api.messages.Search({
-          peer: properChannelId,
+          peer: entity,
           q: query,
           filter: new Api.InputMessagesFilterEmpty(),
           minDate: 0,
@@ -914,24 +981,21 @@ class TelegramService {
       }
 
       const { client } = sessionData;
-      
-      // Convert positive channel IDs to negative
-      const channelIdNum = parseInt(channelId);
-      const properChannelId = channelIdNum > 0 ? -Math.abs(channelIdNum) : channelIdNum;
+      const entity = await this.resolveChannelEntity(client, channelId);
       
       // Get messages around the target ID
       // Get half before and half after the target message
       const halfLimit = Math.floor(limit / 2);
       
       // Get messages before the target
-      const messagesBefore = await client.getMessages(properChannelId, {
+      const messagesBefore = await client.getMessages(entity, {
         limit: halfLimit,
         offsetId: messageId,
         addOffset: 0
       });
       
       // Get messages after the target (including the target)
-      const messagesAfter = await client.getMessages(properChannelId, {
+      const messagesAfter = await client.getMessages(entity, {
         limit: halfLimit + 1,
         offsetId: messageId,
         addOffset: -halfLimit - 1
@@ -1008,7 +1072,7 @@ class TelegramService {
           views: message.views || 0,
           mediaType: mediaType,
           media: mediaInfo,
-          channelId: properChannelId
+          channelId: parseInt(channelId)
         };
       }).filter(Boolean).sort((a, b) => b.id - a.id);
       
@@ -1039,13 +1103,9 @@ class TelegramService {
         }
 
         const { client } = sessionData;
-        
-        // Convert positive channel IDs to negative (Telegram requires negative IDs for channels/groups)
-        const channelIdNum = parseInt(channelId);
-        const properChannelId = channelIdNum > 0 ? -Math.abs(channelIdNum) : channelIdNum;
-        
+        const entity = await this.resolveChannelEntity(client, channelId);
         // Always fetch fresh message data to get updated file reference
-        const messages = await client.getMessages(properChannelId, { 
+        const messages = await client.getMessages(entity, { 
           ids: [parseInt(messageId)] 
         });
         const message = messages[0];
@@ -1118,6 +1178,141 @@ class TelegramService {
     throw lastError;
   }
 
+  // Download media into memory and return a Buffer (no disk write)
+  async downloadMediaBuffer(sessionId, channelId, messageId, progressCallback) {
+    const maxRetries = 3;
+    let lastError;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        await this.ensureInitialized();
+        let sessionData = this.sessions.get(sessionId);
+
+        if (!sessionData) {
+          sessionData = await this.restoreSession(sessionId);
+        }
+
+        if (!sessionData || !sessionData.authenticated) {
+          throw new Error('User not authenticated');
+        }
+
+        const { client } = sessionData;
+        const entity = await this.resolveChannelEntity(client, channelId);
+        // Fetch latest message to ensure valid file reference
+        const messages = await client.getMessages(entity, { ids: [parseInt(messageId)] });
+        const message = messages[0];
+        if (!message || !message.media) {
+          throw new Error('Message or media not found');
+        }
+
+        const doc = message.media.document;
+        const fileAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeFilename');
+        const videoAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeVideo');
+        const fileName = fileAttr?.fileName || `video_${messageId}.mp4`;
+        const mimeType = doc?.mimeType || 'application/octet-stream';
+
+        const buffer = await client.downloadMedia(message.media, {
+          progressCallback: (received, total) => {
+            const progress = total ? (received / total) * 100 : 0;
+            if (progressCallback) progressCallback(progress, received, total);
+          }
+        });
+
+        return { buffer, fileName, mimeType, size: buffer.length, duration: videoAttr?.duration };
+      } catch (error) {
+        lastError = error;
+        const isRetriableError = error.message && (
+          error.message.includes('FILE_REFERENCE_EXPIRED') ||
+          error.message.includes('FILE_REFERENCE_INVALID') ||
+          error.message.includes('FILE_ID_INVALID')
+        );
+        if (!isRetriableError || attempt === maxRetries - 1) break;
+        const delay = Math.pow(2, attempt) * 1000;
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+    throw lastError;
+  }
+
+  // Stream media directly to an HTTP response without buffering whole file
+  async streamMediaToResponse(sessionId, channelId, messageId, res, progressCallback) {
+    await this.ensureInitialized();
+    let sessionData = this.sessions.get(sessionId);
+    if (!sessionData) {
+      sessionData = await this.restoreSession(sessionId);
+    }
+    if (!sessionData || !sessionData.authenticated) {
+      throw new Error('User not authenticated');
+    }
+
+    const { client } = sessionData;
+    const entity = await this.resolveChannelEntity(client, channelId);
+
+    // Fetch message to build input location
+    const messages = await client.getMessages(entity, { ids: [parseInt(messageId)] });
+    const message = messages[0];
+    if (!message || !message.media || message.media.className !== 'MessageMediaDocument') {
+      throw new Error('Message not found or is not a document');
+    }
+
+    const doc = message.media.document;
+    const fileAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeFilename');
+    const fileName = fileAttr?.fileName || `video_${messageId}.mp4`;
+    const mimeType = doc?.mimeType || 'application/octet-stream';
+    const totalSize = typeof doc.size?.toNumber === 'function' ? doc.size.toNumber() : (doc.size || undefined);
+
+    // RFC5987-compliant filename header for non-ASCII names
+    const fallback = fileName
+      .replace(/[\r\n]/g, ' ')
+      .replace(/"/g, '')
+      .replace(/[^\x20-\x7E]/g, '_');
+    const encodeRFC5987 = (str) => encodeURIComponent(str)
+      .replace(/\*/g, '%2A')
+      .replace(/%(7C|60|5E)/g, '%25$1');
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeRFC5987(fileName)}`);
+    // Prefer chunked transfer to avoid waiting for full size
+    if (totalSize && Number.isFinite(totalSize)) {
+      res.setHeader('Content-Length', totalSize);
+    } else {
+      res.setHeader('Transfer-Encoding', 'chunked');
+    }
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+    // Stream chunks
+    const fileLocation = new Api.InputDocumentFileLocation({
+      id: doc.id,
+      accessHash: doc.accessHash,
+      fileReference: doc.fileReference,
+      thumbSize: ''
+    });
+
+    let aborted = false;
+    res.on('close', () => { aborted = true; });
+
+    const requestSize = 512 * 1024; // 512KB per request
+    const iter = client.iterDownload({
+      file: fileLocation,
+      requestSize,
+      dcId: doc.dcId,
+      fileSize: doc.size
+    });
+
+    for await (const chunk of iter) {
+      if (aborted) break;
+      if (progressCallback) {
+        // We don't have running totals here; optional progressCB can be called with chunk length
+        progressCallback(undefined, undefined, undefined);
+      }
+      const canContinue = res.write(chunk);
+      if (!canContinue) {
+        await new Promise(resolve => res.once('drain', resolve));
+      }
+    }
+    if (!aborted) res.end();
+  }
+
   // Find related videos for batch download
   async findRelatedVideos(sessionId, channelId, videoId) {
     try {
@@ -1134,13 +1329,11 @@ class TelegramService {
       }
 
       const { client } = sessionData;
-      
-      // Convert positive channel IDs to negative
-      const channelIdNum = parseInt(channelId);
-      const properChannelId = channelIdNum > 0 ? -Math.abs(channelIdNum) : channelIdNum;
+      // Resolve entity to avoid CHAT_ID_INVALID after restart
+      const entity = await this.resolveChannelEntity(client, channelId);
       
       // Get the target video message
-      const targetMessages = await client.getMessages(properChannelId, { 
+      const targetMessages = await client.getMessages(entity, { 
         ids: [parseInt(videoId)] 
       });
       const targetMessage = targetMessages[0];
@@ -1165,9 +1358,9 @@ class TelegramService {
       } else {
         // Search backwards (older messages) for a text message
         // Get messages before the target video (older messages have smaller IDs)
-        console.log(`Searching backwards for text message before ${targetMessage.id}`);
+      console.log(`Searching backwards for text message before ${targetMessage.id}`);
         
-        const olderMessages = await client.getMessages(properChannelId, {
+      const olderMessages = await client.getMessages(await this.resolveChannelEntity(client, channelId), {
           limit: 50,
           offsetId: targetMessage.id,
           addOffset: 0  // Get messages before this ID
@@ -1204,7 +1397,7 @@ class TelegramService {
       let foundTextMessage = false;
       
       while (!foundTextMessage && searchOffset < 500) {
-        const forwardMessages = await client.getMessages(properChannelId, {
+        const forwardMessages = await client.getMessages(entity, {
           limit: 20,  // Smaller batch to get nearby messages
           offsetId: startId,
           addOffset: -searchOffset  // Negative offset to get messages after offsetId
@@ -1243,7 +1436,7 @@ class TelegramService {
       console.log(`Collecting videos between ${startId} and ${nextTextMessageId || 'end'}`);
       
       // Get all messages in the range
-      const rangeMessages = await client.getMessages(properChannelId, {
+      const rangeMessages = await client.getMessages(await this.resolveChannelEntity(client, channelId), {
         limit: 500,
         minId: startId,
         maxId: nextTextMessageId || undefined  // If nextTextMessageId is null, get all messages after startId
@@ -1331,13 +1524,10 @@ class TelegramService {
         }
 
         const { client } = sessionData;
-        
-        // Convert positive channel IDs to negative (Telegram requires negative IDs for channels/groups)
-        const channelIdNum = parseInt(channelId);
-        const properChannelId = channelIdNum > 0 ? -Math.abs(channelIdNum) : channelIdNum;
+        const entity = await this.resolveChannelEntity(client, channelId);
         
         // Always fetch fresh message data to get updated file reference
-        const messages = await client.getMessages(properChannelId, { 
+        const messages = await client.getMessages(entity, { 
           ids: [parseInt(messageId)] 
         });
         const message = messages[0];
@@ -1407,6 +1597,25 @@ class TelegramService {
     // If we get here, all retries failed
     console.error(`All ${maxRetries} download to path attempts failed for message ${messageId}`);
     throw lastError;
+  }
+
+  // Parse Telegram RPC error into structured info
+  parseTelegramError(err) {
+    const raw = (err && (err.errorMessage || err.message || '')).toString();
+    const msg = raw.toUpperCase();
+    let code = "UNKNOWN";
+    let retryAfter;
+
+    if (msg.includes('SESSION_PASSWORD_NEEDED') || msg.includes('PASSWORD')) code = 'SESSION_PASSWORD_NEEDED';
+    else if (msg.includes('PHONE_CODE_INVALID')) code = 'PHONE_CODE_INVALID';
+    else if (msg.includes('PHONE_CODE_EXPIRED')) code = 'PHONE_CODE_EXPIRED';
+    else if (msg.includes('PHONE_CODE_HASH_INVALID')) code = 'PHONE_CODE_HASH_INVALID';
+    else if (msg.includes('PHONE_NUMBER_UNOCCUPIED')) code = 'PHONE_NUMBER_UNOCCUPIED';
+    else if (msg.includes('PHONE_NUMBER_INVALID')) code = 'PHONE_NUMBER_INVALID';
+    else if (msg.includes('PHONE_NUMBER_FLOOD')) code = 'PHONE_NUMBER_FLOOD';
+    else if (msg.includes('FLOOD_WAIT_')) { code = 'FLOOD_WAIT'; const m = msg.match(/FLOOD_WAIT_(\d+)/); if (m) retryAfter = parseInt(m[1], 10); }
+
+    return { code, message: raw || 'Telegram authentication error', retryAfter };
   }
 
   // Clean up session

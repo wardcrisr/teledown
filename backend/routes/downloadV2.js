@@ -251,6 +251,24 @@ router.get('/list', requireAuth, (req, res) => {
   res.json({ downloads });
 });
 
+// Direct stream a video to the browser without saving on the server
+// Accepts session via header or query (?session=...) for link compatibility
+router.get('/stream/:channelId/:videoId', async (req, res) => {
+  try {
+    const sessionId = req.headers['x-session-id'] || req.query.session;
+    const { channelId, videoId } = req.params;
+    if (!sessionId) return res.status(401).json({ error: 'Authentication required' });
+
+    await telegramService.streamMediaToResponse(sessionId, channelId, videoId, res);
+  } catch (error) {
+    console.error('Stream download error:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({ error: error.message || 'Stream failed' });
+    }
+    try { res.end(); } catch (_) {}
+  }
+});
+
 // Cancel download
 router.post('/cancel/:downloadId', requireAuth, async (req, res) => {
   const { downloadId } = req.params;

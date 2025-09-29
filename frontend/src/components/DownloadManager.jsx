@@ -7,8 +7,9 @@ function DownloadManager({ downloads, setDownloads, sessionId }) {
   const [minimized, setMinimized] = useState(false);
 
   useEffect(() => {
-    // Connect to WebSocket
-    const newSocket = io('http://localhost:8000');
+    // Connect to WebSocket. Default to same-origin; allow override via VITE_WS_URL
+    const socketUrl = import.meta.env.VITE_WS_URL || undefined;
+    const newSocket = io(socketUrl);
     setSocket(newSocket);
     
     console.log('WebSocket connected to backend');

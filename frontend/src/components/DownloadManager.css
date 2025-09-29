@@ -2,7 +2,8 @@
   position: fixed;
   bottom: 0;
   right: 20px;
-  width: 400px;
+  /* Fit small screens without causing horizontal scroll */
+  width: min(400px, calc(100% - 40px));
   background: white;
   border-radius: 10px 10px 0 0;
   box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.15);
@@ -200,8 +201,6 @@
 
 @media (max-width: 480px) {
   .download-manager {
-    width: calc(100% - 40px);
-    right: 20px;
     left: 20px;
   }
 }

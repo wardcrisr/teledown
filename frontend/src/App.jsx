@@ -41,6 +41,8 @@ function App() {
         setSessionId(data.sessionId);
         localStorage.setItem('sessionId', data.sessionId);
         setIsAuthenticated(true);
+        // 重要：结束检查状态，否则界面会一直停留在“Checking authentication...”
+        setIsCheckingAuth(false);
       } else {
         console.log('No restored sessions available');
         setIsCheckingAuth(false);

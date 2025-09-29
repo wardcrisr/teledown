@@ -1,6 +1,8 @@
 .message-list {
   height: 100%;
   overflow-y: auto;
+  /* Prevent horizontal scroll caused by wide children */
+  overflow-x: hidden;
   background: #f5f5f5;
   position: relative;
 }
@@ -243,6 +245,8 @@
   padding: 12px;
   display: flex;
   align-items: center;
+  /* Allow items (title + buttons) to wrap on narrow screens */
+  flex-wrap: wrap;
   gap: 12px;
   color: white;
   position: relative;
@@ -253,6 +257,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* Let text shrink and ellipsize instead of pushing layout */
   min-width: 0;
 }
 
@@ -284,11 +289,13 @@
   display: flex;
   gap: 8px;
   align-items: center;
+  margin-left: auto;
 }
 
 /* Base styles for download buttons */
 .btn-download-single, 
-.btn-download-batch {
+.btn-download-batch,
+.btn-download-local {
   background: rgba(255, 255, 255, 0.2);
   border: 2px solid white;
   border-radius: 50%;
@@ -321,6 +328,17 @@
 
 .btn-download-batch:hover:not(:disabled) {
   background: rgba(156, 39, 176, 1);
+  transform: scale(1.1);
+}
+
+/* Local download (stream to browser) */
+.btn-download-local {
+  background: rgba(76, 175, 80, 0.85);
+  border-color: #4CAF50;
+}
+
+.btn-download-local:hover:not(:disabled) {
+  background: rgba(76, 175, 80, 1);
   transform: scale(1.1);
 }
 
@@ -599,6 +617,12 @@
   .audio-preview,
   .document-preview {
     padding: 10px;
+  }
+
+  /* Stack download buttons below info on small screens */
+  .download-buttons {
+    width: 100%;
+    justify-content: flex-end;
   }
 }
 

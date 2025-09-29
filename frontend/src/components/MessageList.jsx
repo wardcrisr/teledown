@@ -433,6 +433,22 @@ function MessageList({ sessionId, channel, onDownload }) {
     }
   };
 
+  // Direct download to user's computer (stream from server)
+  // Use native browser download manager (shows progress when server sends Content-Length)
+  const handleDirectDownload = (message) => {
+    if (message.mediaType !== 'video') return;
+    const url = `/api/download/stream/${channel.id}/${message.id}?session=${encodeURIComponent(sessionId)}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.rel = 'noopener';
+    // Hint filename; server also sets Content-Disposition
+    const defaultName = message.media?.fileName || `${message.title || 'video'}_${message.id}.mp4`;
+    a.setAttribute('download', defaultName);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
   const formatTime = (timestamp) => {
     const date = new Date(timestamp * 1000);
     return date.toLocaleTimeString('en-US', { 
@@ -551,6 +567,13 @@ function MessageList({ sessionId, channel, onDownload }) {
                       title="Download all related videos"
                     >
                       {downloadingIds.has(message.id) ? '⏳' : '📦'}
+                    </button>
+                    <button
+                      className="btn-download-local"
+                      onClick={() => handleDirectDownload(message)}
+                      title="Save to this device (no server storage)"
+                    >
+                      💾
                     </button>
                   </div>
                 </div>

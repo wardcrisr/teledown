@@ -33,7 +33,8 @@
 
 .app-content {
   display: grid;
-  grid-template-columns: 350px 1fr;
+  /* Sidebar scales with viewport, main area takes remaining space */
+  grid-template-columns: clamp(240px, 28vw, 340px) 1fr;
   gap: 20px;
   min-height: 600px;
 }
@@ -43,6 +44,9 @@
   border-radius: 10px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
   overflow: hidden;
+  /* Avoid grid child enforcing its min-content width */
+  min-width: 0;
+  min-height: 0;
 }
 
 .main-content {
@@ -50,6 +54,9 @@
   border-radius: 10px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
   padding: 20px;
+  /* Allow content to shrink within grid without causing overflow */
+  min-width: 0;
+  min-height: 0;
 }
 
 .placeholder {
@@ -67,6 +74,14 @@
   margin-bottom: 10px;
 }
 
+/* Tablet */
+@media (max-width: 1024px) {
+  .app-content {
+    grid-template-columns: 280px 1fr;
+  }
+}
+
+/* Mobile */
 @media (max-width: 768px) {
   .app-content {
     grid-template-columns: 1fr;

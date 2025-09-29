@@ -1,0 +1,18 @@
+[Unit]
+Description=TeleDown Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/teledown
+EnvironmentFile=/opt/teledown/.env
+ExecStart=/usr/bin/node backend/server.js
+Restart=always
+RestartSec=5
+# Adjust User/Group to a non-root user that owns the app directory
+#User=teledown
+#Group=teledown
+
+[Install]
+WantedBy=multi-user.target
+

@@ -140,11 +140,23 @@ function LoginForm({ onLogin }) {
       
       if (response.ok) {
         onLogin(sessionId);
-      } else if (data.step === 'password_required') {
+      } else if (
+        data.step === 'password_required' ||
+        data.code === 'SESSION_PASSWORD_NEEDED' ||
+        /password/i.test(data.error || '')
+      ) {
         setStep('password');
         setError('Two-factor authentication is enabled. Please enter your password.');
+      } else if (data.code === 'PHONE_CODE_EXPIRED') {
+        setError('Verification code expired. Please request a new one.');
+      } else if (data.code === 'PHONE_CODE_INVALID') {
+        setError('Invalid verification code. Use the newest code and try again.');
+      } else if (data.code === 'PHONE_NUMBER_UNOCCUPIED') {
+        setError('This phone number is not registered on Telegram.');
+      } else if (data.code === 'FLOOD_WAIT') {
+        setError(`Too many attempts. Please wait ${data.retryAfter || ''} seconds and try again.`);
       } else {
-        setError(data.error || 'Invalid code');
+        setError(data.error || 'Authentication failed');
       }
     } catch (err) {
       setError('Network error. Please try again.');

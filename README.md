@@ -68,20 +68,21 @@ npm install
 
 2. **Create environment configuration**:
 
-Backend configuration (`backend/.env`):
+Backend configuration (`.env` at repo root or environment vars):
 ```env
-API_ID=your_api_id
-API_HASH=your_api_hash
-SESSION_STRING=optional_session_string
+TELEGRAM_API_ID=your_api_id
+TELEGRAM_API_HASH=your_api_hash
 PORT=8000
-DATABASE_PATH=./database.db
 DOWNLOAD_PATH=./downloads
 MAX_CONCURRENT_DOWNLOADS=2  # Number of simultaneous downloads (default: 2)
+# In production, restrict CORS for Socket.IO
+# ALLOWED_ORIGIN=https://your.domain
 ```
 
-Frontend configuration (`frontend/.env`):
+Frontend configuration (`frontend/.env`, optional):
 ```env
-VITE_API_URL=http://localhost:8000
+# Optional override if WebSocket runs on a different origin
+# VITE_WS_URL=http://localhost:8000
 ```
 
 ### Step 4: Build the Project
@@ -118,20 +119,23 @@ The application will be available at:
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:8000
 
-### Production Mode
+### Production Mode (single service)
 
-Start the backend server:
+The backend serves the built frontend from `frontend/dist`.
+
+1) Build frontend
 ```bash
-cd backend
+cd frontend
+npm run build
+```
+
+2) Start server
+```bash
+cd ..
 npm start
 ```
 
-For the frontend, serve the built files:
-```bash
-cd frontend
-npm run preview
-# Or use any static server like nginx, apache, etc.
-```
+3) Optionally put Nginx in front (recommended). See `deploy/nginx.teledown.conf`.
 
 ## 🌟 Key Features Explained
 

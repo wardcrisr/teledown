@@ -9,6 +9,12 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true
+      },
+      // Proxy Socket.IO in dev so the frontend can use same-origin WS
+      '/socket.io': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        ws: true
       }
     }
   }

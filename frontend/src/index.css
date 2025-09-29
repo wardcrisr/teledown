@@ -21,9 +21,26 @@ body {
 }
 
 .container {
+  /* Always fit the viewport while capping at a comfortable max */
+  width: 100%;
   max-width: 1200px;
   margin: 0 auto;
   padding: 0 20px;
+}
+
+/* Prevent accidental horizontal overflow on small screens */
+html, body, #root {
+  overflow-x: hidden;
+}
+
+/* On medium/smaller displays, use full-width container and align left */
+@media (max-width: 1360px) {
+  .container {
+    max-width: 100%;
+    margin-left: 10px;
+    margin-right: 10px;
+    padding: 0 10px;
+  }
 }
 
 .btn {

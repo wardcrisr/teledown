@@ -90,10 +90,22 @@ router.post('/phone', async (req, res) => {
     });
   } catch (error) {
     console.error('Phone auth error:', error);
-    res.status(500).json({ 
-      error: 'Failed to send authentication code',
-      details: error.message
-    });
+    const rawMsg = (error && error.message) ? String(error.message) : '';
+    const code = (error && error.code) ? error.code : rawMsg.toUpperCase();
+
+    if (code.includes('PHONE_NUMBER_INVALID')) {
+      return res.status(400).json({ error: 'Invalid phone number format', code: 'PHONE_NUMBER_INVALID' });
+    }
+    if (code.includes('PHONE_NUMBER_UNOCCUPIED')) {
+      return res.status(400).json({ error: 'Phone number is not registered on Telegram', code: 'PHONE_NUMBER_UNOCCUPIED' });
+    }
+    if (code.includes('FLOOD_WAIT')) {
+      const m = code.match(/FLOOD_WAIT_(\d+)/) || rawMsg.toUpperCase().match(/FLOOD_WAIT_(\d+)/);
+      const retryAfter = m ? parseInt(m[1], 10) : undefined;
+      return res.status(429).json({ error: 'Too many attempts. Please wait and try again.', code: 'FLOOD_WAIT', retryAfter });
+    }
+
+    return res.status(500).json({ error: 'Failed to send authentication code', code: 'UNKNOWN', details: rawMsg });
   }
 });
 
@@ -141,19 +153,45 @@ router.post('/code', async (req, res) => {
     });
   } catch (error) {
     console.error('Code verification error:', error);
-    
-    // Check if 2FA password is required
-    if (error.message && error.message.includes('password')) {
-      return res.status(403).json({ 
+
+    const rawMsg = (error && error.message) ? String(error.message) : '';
+    const code = (error && error.code) ? error.code : rawMsg.toUpperCase();
+
+    // 2FA required
+    if (code.includes('SESSION_PASSWORD_NEEDED') || rawMsg.toLowerCase().includes('password')) {
+      return res.status(403).json({
         error: 'Two-factor authentication required',
-        step: 'password_required'
+        step: 'password_required',
+        code: 'SESSION_PASSWORD_NEEDED'
       });
     }
-    
-    res.status(400).json({ 
-      error: 'Invalid authentication code',
-      details: error.message
-    });
+
+    // Flood wait / rate limit
+    if (code.includes('FLOOD_WAIT')) {
+      const m = code.match(/FLOOD_WAIT_(\d+)/) || rawMsg.toUpperCase().match(/FLOOD_WAIT_(\d+)/);
+      const retryAfter = m ? parseInt(m[1], 10) : undefined;
+      return res.status(429).json({
+        error: 'Too many attempts. Please wait and try again.',
+        code: 'FLOOD_WAIT',
+        retryAfter
+      });
+    }
+
+    // Code problems
+    if (code.includes('PHONE_CODE_EXPIRED')) {
+      return res.status(400).json({ error: 'Verification code expired', code: 'PHONE_CODE_EXPIRED' });
+    }
+    if (code.includes('PHONE_CODE_INVALID') || code.includes('PHONE_CODE_HASH_INVALID')) {
+      return res.status(400).json({ error: 'Invalid verification code', code: 'PHONE_CODE_INVALID' });
+    }
+
+    // Phone problems
+    if (code.includes('PHONE_NUMBER_UNOCCUPIED')) {
+      return res.status(400).json({ error: 'Phone number is not registered on Telegram', code: 'PHONE_NUMBER_UNOCCUPIED' });
+    }
+
+    // Fallback
+    return res.status(400).json({ error: 'Authentication failed', code: 'UNKNOWN', details: rawMsg });
   }
 });
 
@@ -196,10 +234,18 @@ router.post('/password', async (req, res) => {
     });
   } catch (error) {
     console.error('Password verification error:', error);
-    res.status(400).json({ 
-      error: 'Invalid 2FA password',
-      details: error.message
-    });
+
+    const rawMsg = (error && error.message) ? String(error.message) : '';
+    const code = (error && error.code) ? error.code : rawMsg.toUpperCase();
+
+    if (code.includes('FLOOD_WAIT')) {
+      const m = code.match(/FLOOD_WAIT_(\d+)/) || rawMsg.toUpperCase().match(/FLOOD_WAIT_(\d+)/);
+      const retryAfter = m ? parseInt(m[1], 10) : undefined;
+      return res.status(429).json({ error: 'Too many attempts. Please wait and try again.', code: 'FLOOD_WAIT', retryAfter });
+    }
+
+    // 2FA wrong password or general failure
+    return res.status(400).json({ error: 'Invalid 2FA password', code: 'PASSWORD_INVALID', details: rawMsg });
   }
 });
 
