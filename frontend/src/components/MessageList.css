@@ -107,6 +107,12 @@
   gap: 5px;
 }
 
+/* 减少滚动重绘的提示（现代浏览器优化） */
+.message-list {
+  will-change: scroll-position;
+  contain: layout paint;
+}
+
 .no-messages {
   text-align: center;
   padding: 40px;
@@ -119,6 +125,7 @@
   text-align: center;
   margin: 20px 0 10px;
   position: relative;
+  cursor: pointer;
 }
 
 .message-date-divider span {
@@ -128,6 +135,12 @@
   font-size: 13px;
   color: #666;
   display: inline-block;
+  transition: background 0.2s, color 0.2s;
+}
+
+.message-date-divider:hover span {
+  background: #d1d5db;
+  color: #111827;
 }
 
 /* Message item */
@@ -233,64 +246,64 @@
 }
 
 /* Video messages */
-.video-message {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+.video-message { display: flex; flex-direction: column; gap: 8px; }
 
-.video-preview {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 8px;
-  padding: 12px;
-  display: flex;
-  align-items: center;
-  /* Allow items (title + buttons) to wrap on narrow screens */
-  flex-wrap: wrap;
-  gap: 12px;
-  color: white;
+/* Preview card (Telegram-like) */
+.video-thumb {
   position: relative;
-}
-
-.video-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  /* Let text shrink and ellipsize instead of pushing layout */
-  min-width: 0;
-}
-
-.video-title {
-  font-weight: 500;
-  font-size: 14px;
-  white-space: nowrap;
+  border-radius: 12px;
   overflow: hidden;
-  text-overflow: ellipsis;
+  background: #1f2937; /* fallback if no poster */
+  cursor: pointer;
+  user-select: none;
+  min-height: 160px;
+  aspect-ratio: 16 / 9;
+}
+.video-thumb img { width: 100%; height: auto; display: block; }
+
+.play-button {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.5);
+  color: #fff; font-size: 28px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(2px);
+}
+.play-button:hover { background: rgba(0,0,0,0.65); }
+
+.video-badges { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; }
+.badge { background: rgba(0,0,0,0.6); color:#fff; font-size:12px; padding: 3px 6px; border-radius:4px; }
+
+.video-title-overlay {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 8px 12px 10px 12px;
+  color: #fff; font-size: 14px; font-weight: 500;
+  background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.55) 100%);
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-.video-meta {
-  display: flex;
-  gap: 12px;
-  font-size: 12px;
-  opacity: 0.9;
+.video-actions {
+  position: absolute; right: 8px; top: 8px; display: flex; gap: 8px;
 }
 
-.duration::before {
-  content: '⏱ ';
-}
+/* Inline player */
+.video-player { position: relative; border-radius: 12px; overflow: hidden; background: #000; }
+.video-player video { width: 100%; height: auto; display: block; }
 
-.size::before {
-  content: '💾 ';
-}
-
-/* Download buttons container */
-.download-buttons {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-left: auto;
-}
+/* Compact mode: shrink video cards into thumbnails */
+.compact-videos .video-thumb { max-width: 320px; min-height: 140px; }
+.compact-videos .video-player { max-width: 520px; }
+.compact-videos .video-title-overlay { font-size: 13px; padding: 6px 10px 8px; }
+.compact-videos .play-button { width: 52px; height: 52px; font-size: 24px; }
+.compact-videos .video-actions .btn-download-single,
+.compact-videos .video-actions .btn-download-batch,
+.compact-videos .video-actions .btn-download-local { width: 32px; height: 32px; }
 
 /* Base styles for download buttons */
 .btn-download-single, 
@@ -662,6 +675,13 @@
   border-radius: 4px;
 }
 
+.image-modal-content video {
+  max-width: 100%;
+  max-height: 85vh;
+  border-radius: 4px;
+  background: #000;
+}
+
 .modal-close {
   position: absolute;
   top: -40px;
@@ -735,4 +755,98 @@
   color: white;
   font-size: 14px;
   opacity: 0.8;
+}
+
+/* Date Picker */
+.date-picker-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+  z-index: 1100;
+}
+
+.date-picker {
+  width: 360px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  overflow: hidden;
+}
+
+.date-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid #eee;
+}
+
+.date-picker-header .month-label {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.month-arrows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.arrow-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: #f3f4f6;
+  color: #374151;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.arrow-btn:hover { background: #e5e7eb; }
+
+.date-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  padding: 12px 14px 8px 14px;
+}
+
+.date-picker-grid .dow {
+  text-align: center;
+  font-size: 12px;
+  color: #6b7280;
+  padding: 6px 0;
+}
+
+.date-picker-grid .day {
+  height: 38px;
+  border-radius: 8px;
+  border: none;
+  background: #f9fafb;
+  color: #111827;
+  cursor: pointer;
+}
+
+.date-picker-grid .day:hover { background: #eef2ff; }
+.date-picker-grid .day.today { outline: 2px solid #93c5fd; }
+.date-picker-grid .day.selected { background: #3b82f6; color: #fff; }
+.date-picker-grid .day.other-month { color: #9ca3af; background: #f3f4f6; }
+
+.date-picker-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 16px 14px 16px;
+}
+
+.date-picker-footer .close-btn {
+  background: none;
+  border: none;
+  color: #2563eb;
+  font-size: 14px;
+  cursor: pointer;
 }

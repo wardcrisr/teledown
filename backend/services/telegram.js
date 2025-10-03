@@ -24,6 +24,8 @@ class TelegramService {
     this.apiHash = process.env.TELEGRAM_API_HASH;
     this.sessions = new Map();
     this.initialized = false;
+    // Cache: per (sessionId, channelId) -> Map(dayKey -> { id, ts })
+    this.dateIdCache = new Map();
     // Delay session restoration to ensure sessionStore is ready
     this.initPromise = this.initialize();
   }
@@ -742,23 +744,25 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       const { client } = sessionData;
       const entity = await this.resolveChannelEntity(client, channelId);
       
-      // Build options for getMessages
-      const options = { limit };
-      
+      // Build options for getMessages following Telegram docs
+      // Prefer minId/maxId with reverse for deterministic paging
+      let messages;
       if (minId) {
-        // Get messages newer than minId
-        options.minId = minId;
-        options.reverse = true; // Get messages in ascending order (oldest to newest)
+        // Newer than a known id
+        messages = await client.getMessages(entity, { limit, minId, reverse: true });
       } else if (offsetId > 0) {
-        // Get messages older than offsetId
-        options.offsetId = offsetId;
+        // Older than a known id
+        messages = await client.getMessages(entity, { limit, maxId: offsetId, reverse: true });
+      } else {
+        // Latest page, then normalize to ascending
+        messages = await client.getMessages(entity, { limit });
       }
-      // If neither minId nor offsetId, get latest messages
-      
-      const messages = await client.getMessages(entity, options);
+
+      // Normalize to ascending order (old->new) for stability
+      const ordered = [...messages].sort((a, b) => a.id - b.id);
 
       // Process all messages (not just media messages)
-      const mediaMessages = messages
+      const mediaMessages = ordered
         .map(message => {
           let mediaInfo = null;
           let title = message.text || message.message || '';
@@ -904,7 +908,7 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       // Process search results
       const searchResults = result.messages.map(message => {
         let mediaInfo = null;
-        let title = message.message || '';
+        let title = message.text || message.message || '';
         let mediaType = 'text';
         
         if (message.media) {
@@ -949,18 +953,271 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
         
         return {
           id: message.id,
-          text: message.message || '',
+          text: message.message || message.text || '',
+          title: title,
           date: message.date,
           mediaType,
           media: mediaInfo,
           views: message.views || 0,
-          channelId: properChannelId
+          channelId: parseInt(channelId)
         };
       });
       
       return searchResults;
     } catch (error) {
       console.error('Error searching messages:', error);
+      throw error;
+    }
+  }
+
+  // Find the earliest message ID within a date range [startSec, endSec)
+  async getFirstMessageIdByDateRange(sessionId, channelId, startSec, endSec) {
+    try {
+      await this.ensureInitialized();
+      let sessionData = this.sessions.get(sessionId);
+      if (!sessionData) sessionData = await this.restoreSession(sessionId);
+      if (!sessionData || !sessionData.authenticated) {
+        throw new Error('User not authenticated');
+      }
+
+      const { client } = sessionData;
+      const entity = await this.resolveChannelEntity(client, channelId);
+
+      // 1) Cache check (only when range is exactly one local day)
+      const toDayKey = (sec) => {
+        const d = new Date(sec * 1000);
+        const y = d.getFullYear();
+        const m = (d.getMonth() + 1).toString().padStart(2, '0');
+        const dd = d.getDate().toString().padStart(2, '0');
+        return `${y}-${m}-${dd}`;
+      };
+      const isFullDay = (endSec - startSec) >= 86400 && (endSec - startSec) <= 90000; // allow small drift
+      const dayKey = isFullDay ? toDayKey(startSec) : null;
+      const chanKey = `${sessionId}:${channelId}`;
+      if (dayKey) {
+        const channelCache = this.dateIdCache.get(chanKey);
+        const entry = channelCache?.get(dayKey);
+        if (entry && entry.id !== undefined) {
+          return entry.id || null; // 0 treated as null
+        }
+      }
+
+      // Helper to fetch the newest message (latest id)
+      const getLatest = async () => {
+        const arr = await client.getMessages(entity, { limit: 1 });
+        return arr && arr[0] ? arr[0] : null;
+      };
+
+      // 2) Fast-path with binary search on message id to approximate boundary
+      const latest = await getLatest();
+      if (!latest) return null;
+      if (latest.date < startSec) {
+        // All messages are earlier than target day
+        if (dayKey) {
+          let m = this.dateIdCache.get(chanKey); if (!m) { m = new Map(); this.dateIdCache.set(chanKey, m); }
+          m.set(dayKey, { id: 0, ts: Date.now() });
+        }
+        return null;
+      }
+
+      let low = 0;                  // date(low) < start
+      let high = latest.id + 1;     // sentinel: date(high) >= start (virtual)
+      let candidateId = null;
+      for (let i = 0; i < 25 && high - low > 1; i++) {
+        const mid = Math.floor((low + high) / 2);
+        const page = await client.getMessages(entity, { limit: 1, maxId: mid });
+        const msg = page && page[0] ? page[0] : null;
+        if (!msg) {
+          // No message at or before mid, move high down
+          high = mid;
+          continue;
+        }
+        if (msg.date >= startSec) {
+          candidateId = msg.id;
+          high = msg.id; // search earlier ids
+        } else {
+          low = msg.id; // need later ids
+        }
+      }
+
+      // If we still don't have a candidate, fallback to search
+      let foundId = candidateId;
+
+      // 3) Refine to the earliest message within the day by scanning backward in small batches
+      if (foundId) {
+        let curMax = foundId;
+        const batch = 100;
+        for (let step = 0; step < 30; step++) { // up to 3000 msgs
+          const msgs = await client.getMessages(entity, { limit: batch, maxId: curMax });
+          if (!msgs || msgs.length === 0) break;
+          // Iterate from oldest to newest within this batch
+          let oldest = msgs[msgs.length - 1];
+          // If even the oldest is within day, keep going further back
+          if (oldest && oldest.date >= startSec) {
+            curMax = oldest.id;
+            foundId = oldest.id;
+            continue;
+          }
+          // Otherwise, find first that is within the day
+          for (let k = msgs.length - 1; k >= 0; k--) {
+            const m = msgs[k];
+            if (m.date >= startSec) foundId = m.id; else break;
+          }
+          break;
+        }
+      }
+
+      // 4) Validate within [startSec, endSec)
+      if (foundId) {
+        const check = await client.getMessages(entity, { ids: [foundId] });
+        const mm = check && check[0];
+        if (!mm || !(mm.date >= startSec && mm.date < endSec)) {
+          foundId = null;
+        }
+      }
+
+      // 5) Fallback: limited search within day if binary search failed
+      if (!foundId) {
+        let earliest = null;
+        let offsetId = 0;
+        for (let pages = 0; pages < 8; pages++) { // smaller cap due to preceding steps
+          const result = await client.invoke(new Api.messages.Search({
+            peer: entity,
+            q: '',
+            filter: new Api.InputMessagesFilterEmpty(),
+            minDate: startSec,
+            maxDate: endSec,
+            offsetId,
+            addOffset: 0,
+            limit: 100,
+            maxId: 0,
+            minId: 0,
+            hash: BigInt(0),
+          }));
+          const msgs = result.messages || [];
+          if (!msgs.length) break;
+          for (const m of msgs) {
+            if (typeof m.date === 'number' && m.date >= startSec && m.date < endSec) {
+              if (!earliest || m.date < earliest.date) earliest = m;
+            }
+          }
+          const oldest = msgs[msgs.length - 1];
+          if (!oldest) break;
+          offsetId = oldest.id;
+          if (oldest.date && oldest.date < startSec) break;
+        }
+        foundId = earliest ? earliest.id : null;
+      }
+
+      // 6) Cache result for whole day queries
+      if (dayKey) {
+        let m = this.dateIdCache.get(chanKey);
+        if (!m) { m = new Map(); this.dateIdCache.set(chanKey, m); }
+        m.set(dayKey, { id: foundId || 0, ts: Date.now() });
+      }
+
+      return foundId;
+    } catch (error) {
+      console.error('Error searching earliest message by date:', error);
+      throw error;
+    }
+  }
+
+  // Get messages strictly within a date range [startSec, endSec)
+  // Supports pagination via minId: only return messages with id > minId
+  async getMessagesByDateRange(sessionId, channelId, startSec, endSec, limit = 50, minId = 0) {
+    try {
+      await this.ensureInitialized();
+      let sessionData = this.sessions.get(sessionId);
+      if (!sessionData) sessionData = await this.restoreSession(sessionId);
+      if (!sessionData || !sessionData.authenticated) {
+        throw new Error('User not authenticated');
+      }
+
+      const { client } = sessionData;
+      const entity = await this.resolveChannelEntity(client, channelId);
+
+      const result = await client.invoke(new Api.messages.Search({
+        peer: entity,
+        q: '',
+        filter: new Api.InputMessagesFilterEmpty(),
+        minDate: startSec,
+        maxDate: endSec,
+        offsetId: 0,
+        addOffset: 0,
+        limit: limit,
+        maxId: 0,
+        minId: minId || 0,
+        hash: BigInt(0),
+      }));
+
+      const list = (result.messages || []).map((message) => {
+        let mediaInfo = null;
+        let title = message.text || message.message || '';
+        let mediaType = 'text';
+
+        if (message.media) {
+          if (message.media.className === 'MessageMediaPhoto') {
+            mediaType = 'photo';
+            mediaInfo = { type: 'photo' };
+          } else if (message.media.className === 'MessageMediaDocument') {
+            const doc = message.media.document;
+            if (doc && doc.attributes) {
+              const videoAttr = doc.attributes.find(a => a.className === 'DocumentAttributeVideo');
+              const audioAttr = doc.attributes.find(a => a.className === 'DocumentAttributeAudio');
+              const filenameAttr = doc.attributes.find(a => a.className === 'DocumentAttributeFilename');
+              if (videoAttr) {
+                mediaType = 'video';
+                title = filenameAttr?.fileName || title || 'Video';
+                mediaInfo = {
+                  type: 'video',
+                  duration: videoAttr.duration,
+                  width: videoAttr.w,
+                  height: videoAttr.h,
+                  fileName: filenameAttr?.fileName,
+                  size: typeof doc.size?.toNumber === 'function' ? doc.size.toNumber() : (doc.size || 0)
+                };
+              } else if (audioAttr) {
+                mediaType = 'audio';
+                title = filenameAttr?.fileName || audioAttr.title || 'Audio';
+                mediaInfo = {
+                  type: 'audio',
+                  duration: audioAttr.duration,
+                  title: audioAttr.title,
+                  performer: audioAttr.performer,
+                  fileName: filenameAttr?.fileName
+                };
+              } else {
+                mediaType = 'document';
+                title = filenameAttr?.fileName || 'Document';
+                mediaInfo = {
+                  type: 'document',
+                  fileName: filenameAttr?.fileName,
+                  size: typeof doc.size?.toNumber === 'function' ? doc.size.toNumber() : (doc.size || 0)
+                };
+              }
+            }
+          }
+        }
+
+        return {
+          id: message.id,
+          text: message.message || message.text || '',
+          title: title,
+          date: message.date,
+          mediaType: mediaType,
+          media: mediaInfo,
+          views: message.views || 0,
+          channelId: parseInt(channelId)
+        };
+      });
+
+      // Ascending: old -> new for consistent merging on frontend
+      const videos = list.sort((a, b) => a.id - b.id);
+      const nextCursorId = videos.length ? videos[videos.length - 1].id : (minId || 0);
+      return { videos, nextCursorId };
+    } catch (error) {
+      console.error('Error getting messages by date range:', error);
       throw error;
     }
   }
@@ -983,29 +1240,14 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       const { client } = sessionData;
       const entity = await this.resolveChannelEntity(client, channelId);
       
-      // Get messages around the target ID
-      // Get half before and half after the target message
+      // Get messages around the target ID using minId/maxId per Telegram docs
       const halfLimit = Math.floor(limit / 2);
-      
-      // Get messages before the target
-      const messagesBefore = await client.getMessages(entity, {
-        limit: halfLimit,
-        offsetId: messageId,
-        addOffset: 0
-      });
-      
-      // Get messages after the target (including the target)
-      const messagesAfter = await client.getMessages(entity, {
-        limit: halfLimit + 1,
-        offsetId: messageId,
-        addOffset: -halfLimit - 1
-      });
-      
-      // Combine and deduplicate messages
-      const allMessages = [...messagesAfter, ...messagesBefore];
-      const uniqueMessages = Array.from(
-        new Map(allMessages.map(m => [m.id, m])).values()
-      );
+      const before = await client.getMessages(entity, { limit: halfLimit, maxId: messageId, reverse: true });
+      const after = await client.getMessages(entity, { limit: halfLimit + 1, minId: messageId, reverse: true });
+      // Combine, dedupe, and normalize to ascending
+      const map = new Map();
+      [...before, ...after].forEach(m => { if (m) map.set(m.id, m); });
+      const uniqueMessages = Array.from(map.values()).sort((a, b) => a.id - b.id);
       
       // Process messages similar to getChannelMessages
       const processedMessages = uniqueMessages.map(message => {
@@ -1074,7 +1316,7 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
           media: mediaInfo,
           channelId: parseInt(channelId)
         };
-      }).filter(Boolean).sort((a, b) => b.id - a.id);
+      }).filter(Boolean).sort((a, b) => a.id - b.id);
       
       return processedMessages;
     } catch (error) {
@@ -1234,8 +1476,85 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
     throw lastError;
   }
 
+  
+  // Download media pointed by a Telegram message link to a local path
+  // Supports links: https://t.me/c/<internal>/<msgId> and https://t.me/<username>/<msgId>
+  async downloadFromMessageLinkToPath(sessionId, link, targetPath, progressCallback) {
+    await this.ensureInitialized();
+    let sessionData = this.sessions.get(sessionId);
+    if (!sessionData) sessionData = await this.restoreSession(sessionId);
+    if (!sessionData || !sessionData.authenticated) {
+      throw new Error('User not authenticated');
+    }
+
+    const { client } = sessionData;
+    // Parse link
+    const m1 = link.match(/https?:\/\/t\.me\/c\/(\d+)\/(\d+)/i);
+    const m2 = link.match(/https?:\/\/t\.me\/([A-Za-z0-9_]{4,})\/(\d+)/i);
+    let entity;
+    let msgId;
+    if (m1) {
+      const internal = m1[1];
+      msgId = parseInt(m1[2], 10);
+      // Full channel id is -100 + internal
+      const fullId = BigInt(`-100${internal}`);
+      entity = await client.getEntity(fullId);
+    } else if (m2) {
+      const username = m2[1];
+      msgId = parseInt(m2[2], 10);
+      entity = await client.getEntity(username);
+    } else {
+      throw new Error('Unsupported link format');
+    }
+
+    const messages = await client.getMessages(entity, { ids: [msgId] });
+    const message = messages?.[0];
+    if (!message || !message.media) throw new Error('Message or media not found');
+
+    const doc = message.media.document;
+    const fileAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeFilename');
+    const mime = doc?.mimeType || 'video/mp4';
+    const hasVideoMime = (mime || '').toLowerCase().startsWith('video/');
+    // Prefer original filename if available, otherwise synthesize an mp4
+    let inferredName = (fileAttr?.fileName || `video_${msgId}.mp4`).toString();
+    // Ensure the file has a video extension so Telegram can stream it
+    if (!/\.[A-Za-z0-9]{2,5}$/.test(inferredName)) {
+      inferredName += '.mp4';
+    }
+    // Sanitize filename
+    const safeName = inferredName.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+    const pathMod = require('path');
+    const dir = pathMod.dirname(targetPath);
+    await fsExtra.ensureDir(dir);
+    let finalPath = pathMod.join(dir, safeName);
+    try {
+      if (await fsExtra.pathExists(finalPath)) {
+        const base = safeName.replace(/\.[^/.]+$/, '');
+        const extMatch = safeName.match(/\.[^/.]+$/);
+        const ext = extMatch ? extMatch[0] : '.mp4';
+        finalPath = pathMod.join(dir, `${base}_${Date.now()}${ext}`);
+      }
+    } catch (_) {}
+
+    const buffer = await client.downloadMedia(message.media, {
+      progressCallback: (received, total) => {
+        if (progressCallback) {
+          const cont = progressCallback(received, total);
+          if (cont === false) {
+            // Abort download
+            throw new Error('Download cancelled by user');
+          }
+        }
+      }
+    });
+    await fsExtra.writeFile(finalPath, buffer);
+    return { fileName: safeName, filePath: finalPath, size: buffer.length };
+  }
+
   // Stream media directly to an HTTP response without buffering whole file
-  async streamMediaToResponse(sessionId, channelId, messageId, res, progressCallback) {
+  // options: { disposition: 'inline' | 'attachment' }
+  async streamMediaToResponse(sessionId, channelId, messageId, res, options = {}, progressCallback) {
     await this.ensureInitialized();
     let sessionData = this.sessions.get(sessionId);
     if (!sessionData) {
@@ -1271,7 +1590,8 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       .replace(/%(7C|60|5E)/g, '%25$1');
 
     res.setHeader('Content-Type', mimeType);
-    res.setHeader('Content-Disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeRFC5987(fileName)}`);
+    const disposition = (options && options.disposition) === 'inline' ? 'inline' : 'attachment';
+    res.setHeader('Content-Disposition', `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeRFC5987(fileName)}`);
     // Prefer chunked transfer to avoid waiting for full size
     if (totalSize && Number.isFinite(totalSize)) {
       res.setHeader('Content-Length', totalSize);
@@ -1311,6 +1631,59 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       }
     }
     if (!aborted) res.end();
+  }
+
+  // Download a video's thumbnail image (JPEG) for preview
+  async getMessageVideoThumbnail(sessionId, channelId, messageId, size = 'm') {
+    try {
+      await this.ensureInitialized();
+      let sessionData = this.sessions.get(sessionId);
+      if (!sessionData) {
+        sessionData = await this.restoreSession(sessionId);
+      }
+      if (!sessionData || !sessionData.authenticated) {
+        throw new Error('User not authenticated');
+      }
+
+      const { client } = sessionData;
+      const entity = await this.resolveChannelEntity(client, channelId);
+      const messages = await client.getMessages(entity, { ids: [parseInt(messageId)] });
+      const message = messages[0];
+      if (!message || !message.media || message.media.className !== 'MessageMediaDocument') {
+        return null; // Not a document/video
+      }
+
+      const doc = message.media.document;
+
+      // First try GramJS convenience method to fetch a thumbnail
+      try {
+        const buffer = await client.downloadMedia(message.media, { thumb: size });
+        if (buffer && buffer.length > 0) {
+          return { buffer, contentType: 'image/jpeg' };
+        }
+      } catch (_) { /* fallthrough to direct file location */ }
+
+      // Fallback: download via file location specifying thumbSize
+      try {
+        const fileLocation = new Api.InputDocumentFileLocation({
+          id: doc.id,
+          accessHash: doc.accessHash,
+          fileReference: doc.fileReference,
+          thumbSize: size
+        });
+        const buffer = await client.downloadFile({ file: fileLocation, dcId: doc.dcId });
+        if (buffer && buffer.length > 0) {
+          return { buffer, contentType: 'image/jpeg' };
+        }
+      } catch (e) {
+        console.error('Thumbnail download fallback failed:', e.message);
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error getting video thumbnail:', error);
+      throw error;
+    }
   }
 
   // Find related videos for batch download

@@ -74,10 +74,14 @@ function VideoList({ sessionId, channel, onDownload }) {
   };
 
   const formatDuration = (seconds) => {
-    if (!seconds) return 'N/A';
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+    if (seconds == null) return 'N/A';
+    const total = Math.floor(Number(seconds) || 0);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return `${h.toString().padStart(2, '0')}:${m
+      .toString()
+      .padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
   const formatSize = (bytes) => {

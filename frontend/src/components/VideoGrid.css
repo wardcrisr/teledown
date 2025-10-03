@@ -1,0 +1,50 @@
+.video-grid {
+  display: grid;
+  gap: 4px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.vgrid-single { grid-template-columns: 1fr; }
+.vgrid-two { grid-template-columns: 1fr 1fr; }
+.vgrid-three { grid-template-columns: 1fr 1fr; }
+.vgrid-three .video-grid-item:first-child { grid-column: span 2; }
+.vgrid-four { grid-template-columns: 1fr 1fr; }
+.vgrid-six { grid-template-columns: repeat(3, 1fr); }
+.vgrid-nine { grid-template-columns: repeat(3, 1fr); }
+.vgrid-many { grid-template-columns: repeat(3, 1fr); }
+
+.video-grid-item {
+  position: relative;
+  aspect-ratio: 16/9;
+  background: #111;
+  cursor: pointer;
+}
+.video-grid-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.v-download {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  cursor: pointer;
+  z-index: 2;
+}
+.v-download:hover { background: rgba(0,0,0,0.75); }
+
+.v-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.v-play { width: 48px; height: 48px; border-radius: 50%; background: #0008; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 22px; }
+.v-badge { position: absolute; right: 6px; bottom: 6px; background: #0009; color: #fff; font-size: 12px; padding: 3px 6px; border-radius: 4px; }
+
+@media (max-width: 520px) {
+  .video-grid { gap: 3px; }
+}
