@@ -30,6 +30,7 @@ const authRoutes = require('./routes/authV2');
 const channelRoutes = require('./routes/channelsV2');
 const downloadRoutes = require('./routes/downloadV2');
 const botRoutes = require('./routes/bot');
+const adminRoutes = require('./routes/admin');
 
 // Routes
 app.get('/api/health', (req, res) => {
@@ -40,6 +41,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/channels', channelRoutes);
 app.use('/api/download', downloadRoutes);
 app.use('/api/bot', botRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Socket.io connection handling
 io.on('connection', (socket) => {

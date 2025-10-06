@@ -1479,6 +1479,8 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
   
   // Download media pointed by a Telegram message link to a local path
   // Supports links: https://t.me/c/<internal>/<msgId> and https://t.me/<username>/<msgId>
+  // This implementation streams directly to disk and retries on transient errors
+  // to avoid hanging mid-download (e.g., FILE_REFERENCE_EXPIRED / network hiccups).
   async downloadFromMessageLinkToPath(sessionId, link, targetPath, progressCallback) {
     await this.ensureInitialized();
     let sessionData = this.sessions.get(sessionId);
@@ -1488,7 +1490,7 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
     }
 
     const { client } = sessionData;
-    // Parse link
+    // Parse link (allow trailing query params like ?single)
     const m1 = link.match(/https?:\/\/t\.me\/c\/(\d+)\/(\d+)/i);
     const m2 = link.match(/https?:\/\/t\.me\/([A-Za-z0-9_]{4,})\/(\d+)/i);
     let entity;
@@ -1498,35 +1500,55 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       msgId = parseInt(m1[2], 10);
       // Full channel id is -100 + internal
       const fullId = BigInt(`-100${internal}`);
-      entity = await client.getEntity(fullId);
+      try {
+        entity = await client.getEntity(fullId);
+      } catch (e) {
+        // Refresh dialogs to populate entity cache (fix PeerChannel not found)
+        try { await client.getDialogs(); entity = await client.getEntity(fullId); } catch (ee) {
+          throw new Error('Could not find the input entity for channel; please ensure the account has joined this chat');
+        }
+      }
     } else if (m2) {
       const username = m2[1];
       msgId = parseInt(m2[2], 10);
-      entity = await client.getEntity(username);
+      try {
+        entity = await client.getEntity(username);
+      } catch (e) {
+        try { await client.getDialogs(); entity = await client.getEntity(username); } catch (ee) {
+          throw new Error('Could not resolve username entity; please ensure the account can access this channel');
+        }
+      }
     } else {
       throw new Error('Unsupported link format');
     }
 
-    const messages = await client.getMessages(entity, { ids: [msgId] });
-    const message = messages?.[0];
-    if (!message || !message.media) throw new Error('Message or media not found');
+    // Helper to fetch latest Message (refreshes fileReference if needed)
+    const fetchMessage = async () => {
+      const messages = await client.getMessages(entity, { ids: [msgId] });
+      const message = messages?.[0];
+      if (!message || !message.media) throw new Error('Message or media not found');
+      return message;
+    };
 
-    const doc = message.media.document;
-    const fileAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeFilename');
-    const mime = doc?.mimeType || 'video/mp4';
-    const hasVideoMime = (mime || '').toLowerCase().startsWith('video/');
-    // Prefer original filename if available, otherwise synthesize an mp4
-    let inferredName = (fileAttr?.fileName || `video_${msgId}.mp4`).toString();
-    // Ensure the file has a video extension so Telegram can stream it
-    if (!/\.[A-Za-z0-9]{2,5}$/.test(inferredName)) {
-      inferredName += '.mp4';
-    }
-    // Sanitize filename
-    const safeName = inferredName.replace(/[^a-zA-Z0-9._-]/g, '_');
-
+    // Compute a stable, safe final filepath
     const pathMod = require('path');
     const dir = pathMod.dirname(targetPath);
     await fsExtra.ensureDir(dir);
+
+    // Inspect original filename if available
+    const initial = await fetchMessage();
+    const doc0 = initial.media.document;
+    const fileAttr0 = doc0?.attributes?.find(a => a.className === 'DocumentAttributeFilename');
+    const videoAttr0 = doc0?.attributes?.find(a => a.className === 'DocumentAttributeVideo');
+    let inferredName = (fileAttr0?.fileName || `video_${msgId}.mp4`).toString();
+    if (!/\.[A-Za-z0-9]{2,5}$/.test(inferredName)) inferredName += '.mp4';
+    // Keep unicode characters (e.g., Chinese), only strip path separators and illegal characters
+    const safeName = inferredName
+      .replace(/[\\/\0]/g, '_')
+      .replace(/[<>:"|?*]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim();
+
     let finalPath = pathMod.join(dir, safeName);
     try {
       if (await fsExtra.pathExists(finalPath)) {
@@ -1537,19 +1559,151 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       }
     } catch (_) {}
 
-    const buffer = await client.downloadMedia(message.media, {
-      progressCallback: (received, total) => {
-        if (progressCallback) {
-          const cont = progressCallback(received, total);
-          if (cont === false) {
-            // Abort download
-            throw new Error('Download cancelled by user');
+    // Stream to disk with retries
+    const maxRetries = 4;
+    let attempt = 0;
+    let lastError;
+    for (; attempt < maxRetries; attempt++) {
+      try {
+        const message = attempt === 0 ? initial : await fetchMessage();
+        // Use TelegramClient.downloadMedia with outputFile to stream directly to file
+        const resultPath = await client.downloadMedia(message, {
+          outputFile: finalPath,
+          progressCallback: (received, total) => {
+            if (progressCallback) {
+              const cont = progressCallback(received, total);
+              if (cont === false) {
+                throw new Error('Download cancelled by user');
+              }
+            }
           }
-        }
+        });
+
+        // downloadMedia with outputFile returns the path string
+        const stat = await fsExtra.stat(resultPath);
+        return {
+          fileName: pathMod.basename(resultPath),
+          displayName: inferredName, // original for captions
+          filePath: resultPath,
+          size: stat.size,
+          duration: (videoAttr0 && typeof videoAttr0.duration === 'number') ? videoAttr0.duration : undefined,
+          width: (videoAttr0 && typeof videoAttr0.w === 'number') ? videoAttr0.w : undefined,
+          height: (videoAttr0 && typeof videoAttr0.h === 'number') ? videoAttr0.h : undefined,
+          mimeType: doc0?.mimeType || undefined
+        };
+      } catch (error) {
+        lastError = error;
+        const msg = (error && error.message) ? error.message : String(error);
+        const retriable = /FILE_REFERENCE_EXPIRED|FILE_REFERENCE_INVALID|FILE_ID_INVALID|TIMEOUT|NET|FLOOD_WAIT|RPC_CALL_FAIL/i.test(msg);
+        // Clean up partial file between attempts
+        try { if (await fsExtra.pathExists(finalPath)) await fsExtra.unlink(finalPath); } catch (_) {}
+        if (!retriable || attempt === maxRetries - 1) break;
+        const delay = Math.min(30000, (2 ** attempt) * 1000);
+        await new Promise(r => setTimeout(r, delay));
       }
-    });
-    await fsExtra.writeFile(finalPath, buffer);
-    return { fileName: safeName, filePath: finalPath, size: buffer.length };
+    }
+    throw lastError || new Error('Unknown download error');
+  }
+
+  /**
+   * Peek meta information from a t.me link without downloading.
+   * Returns { displayName, size, duration, width, height, mimeType }
+   */
+  async getMessageMetaFromLink(sessionId, link) {
+    await this.ensureInitialized();
+    let sessionData = this.sessions.get(sessionId);
+    if (!sessionData) sessionData = await this.restoreSession(sessionId);
+    if (!sessionData || !sessionData.authenticated) {
+      throw new Error('User not authenticated');
+    }
+
+    const { client } = sessionData;
+    const m1 = link.match(/https?:\/\/t\.me\/c\/(\d+)\/(\d+)/i);
+    const m2 = link.match(/https?:\/\/t\.me\/([A-Za-z0-9_]{4,})\/(\d+)/i);
+    let entity;
+    let msgId;
+    if (m1) {
+      const internal = m1[1];
+      msgId = parseInt(m1[2], 10);
+      entity = await client.getEntity(BigInt(`-100${internal}`));
+    } else if (m2) {
+      const username = m2[1];
+      msgId = parseInt(m2[2], 10);
+      entity = await client.getEntity(username);
+    } else {
+      throw new Error('Unsupported link format');
+    }
+    const messages = await client.getMessages(entity, { ids: [msgId] });
+    const message = messages?.[0];
+    if (!message || !message.media || message.media.className !== 'MessageMediaDocument') return null;
+    const doc = message.media.document;
+    const fileAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeFilename');
+    const videoAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeVideo');
+    let inferredName = (fileAttr?.fileName || `video_${msgId}.mp4`).toString();
+    if (!/\.[A-Za-z0-9]{2,5}$/.test(inferredName)) inferredName += '.mp4';
+    const displayName = inferredName.replace(/[\\/\0]/g, '_').replace(/[<>:"|?*]/g, '_').replace(/\s+/g, ' ').trim();
+    const sizeBI = doc?.size;
+    const size = sizeBI && typeof sizeBI.toJSNumber === 'function' ? sizeBI.toJSNumber() : undefined;
+    return {
+      displayName,
+      size,
+      duration: (videoAttr && typeof videoAttr.duration === 'number') ? videoAttr.duration : undefined,
+      width: (videoAttr && typeof videoAttr.w === 'number') ? videoAttr.w : undefined,
+      height: (videoAttr && typeof videoAttr.h === 'number') ? videoAttr.h : undefined,
+      mimeType: doc?.mimeType || undefined,
+    };
+  }
+
+  // Fetch thumbnail image (JPEG) for a message link.
+  // Returns Buffer or null if not available.
+  async getThumbnailFromMessageLink(sessionId, link, size = 'm') {
+    await this.ensureInitialized();
+    let sessionData = this.sessions.get(sessionId);
+    if (!sessionData) sessionData = await this.restoreSession(sessionId);
+    if (!sessionData || !sessionData.authenticated) {
+      throw new Error('User not authenticated');
+    }
+
+    const { client } = sessionData;
+    const m1 = link.match(/https?:\/\/t\.me\/c\/(\d+)\/(\d+)/i);
+    const m2 = link.match(/https?:\/\/t\.me\/([A-Za-z0-9_]{4,})\/(\d+)/i);
+    let entity;
+    let msgId;
+    if (m1) {
+      const internal = m1[1];
+      msgId = parseInt(m1[2], 10);
+      entity = await client.getEntity(BigInt(`-100${internal}`));
+    } else if (m2) {
+      const username = m2[1];
+      msgId = parseInt(m2[2], 10);
+      entity = await client.getEntity(username);
+    } else {
+      throw new Error('Unsupported link format');
+    }
+
+    const messages = await client.getMessages(entity, { ids: [msgId] });
+    const message = messages?.[0];
+    if (!message || !message.media || message.media.className !== 'MessageMediaDocument') return null;
+    const doc = message.media.document;
+
+    // Try GramJS convenience method
+    try {
+      const buffer = await client.downloadMedia(message.media, { thumb: size });
+      if (buffer && buffer.length > 0) return buffer;
+    } catch (_) { /* fallthrough */ }
+
+    // Fallback via file location specifying thumbSize
+    try {
+      const fileLocation = new Api.InputDocumentFileLocation({
+        id: doc.id,
+        accessHash: doc.accessHash,
+        fileReference: doc.fileReference,
+        thumbSize: size
+      });
+      const buffer = await client.downloadFile({ file: fileLocation, dcId: doc.dcId });
+      if (buffer && buffer.length > 0) return buffer;
+    } catch (_) { /* ignore */ }
+    return null;
   }
 
   // Stream media directly to an HTTP response without buffering whole file

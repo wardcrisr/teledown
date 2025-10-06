@@ -69,9 +69,104 @@
     "qrExpires": 1759050771,
     "lastUpdated": 1759050741864
   },
-  "session_1759398416037_2x4fkotqi": {
+  "session_1759609853649_swwu28i5o": {
+    "phone": "+1 631 743 1800",
     "authenticated": true,
-    "stringSession": "1BQANOTEuMTA4LjU2LjEzOAG7GFtyMkKR2BgtjPstrciameLvu2QPdKSO/XPmNvopvjvT2EDNmohvuz+MxYU9L6Oab3AmN7uW2/zUwXDleEQm3Z/HcfyBMctxqK2rHzS74MDsjQFg70MpobMfoDqTsWSGKOm1uC3kuK95HEwY+oe1fInOLRtbBB22vQyp48QTpYpSm67xf2ewf5ZqgeRww3S1Gh3rJ9FoU1mNtDOa7sN8D2XXRVDOgYj+SYMUTYLJ7gkVaFBxyg2oo94NlhrheEG94laXP4f8KVAoRksApdpSvfv25qOeaU0Z5qzbCiIIesfS/JXfXedEbOwlC3Za/31uajVEBNsHNikAIJsZoR1NFA==",
+    "step": "authenticated",
+    "phoneCodeHash": "73e618f1457a2de984",
+    "lastUpdated": 1759609926854,
+    "user": {
+      "flags": 301997179,
+      "self": true,
+      "contact": true,
+      "mutualContact": true,
+      "deleted": false,
+      "bot": false,
+      "botChatHistory": false,
+      "botNochats": false,
+      "verified": false,
+      "restricted": false,
+      "min": false,
+      "botInlineGeo": false,
+      "support": false,
+      "scam": false,
+      "applyMinPhoto": true,
+      "fake": false,
+      "botAttachMenu": false,
+      "premium": true,
+      "attachMenuEnabled": false,
+      "flags2": 528,
+      "botCanEdit": false,
+      "closeFriend": false,
+      "storiesHidden": false,
+      "storiesUnavailable": true,
+      "contactRequirePremium": false,
+      "botBusiness": false,
+      "botHasMainApp": false,
+      "id": "7506500905",
+      "accessHash": "4975723664128148176",
+      "firstName": "小红薯",
+      "lastName": null,
+      "username": "realkyle",
+      "phone": "16317431800",
+      "photo": {
+        "flags": 3,
+        "hasVideo": true,
+        "personal": false,
+        "photoId": "6201486571727866547",
+        "strippedThumb": {
+          "type": "Buffer",
+          "data": [
+            1,
+            8,
+            8,
+            151,
+            112,
+            216,
+            57,
+            201,
+            39,
+            242,
+            162,
+            138,
+            43,
+            46,
+            84,
+            118,
+            165,
+            99
+          ]
+        },
+        "dcId": 5,
+        "className": "UserProfilePhoto"
+      },
+      "status": {
+        "expires": 1759610223,
+        "className": "UserStatusOnline"
+      },
+      "botInfoVersion": null,
+      "restrictionReason": null,
+      "botInlinePlaceholder": null,
+      "langCode": null,
+      "emojiStatus": null,
+      "usernames": null,
+      "storiesMaxId": null,
+      "color": null,
+      "profileColor": {
+        "flags": 1,
+        "color": 2,
+        "backgroundEmojiId": null,
+        "className": "PeerColor"
+      },
+      "botActiveUsers": null,
+      "botVerificationIcon": null,
+      "className": "User"
+    },
+    "sessionString": "1BQANOTEuMTA4LjU2LjEzOAG7u89M8N3s00LvPBHTIyyLZqxXmK16SPdSnA9s0S2vkQWFHx7FoGBXoUI3/UNuYr21MXMVxHkkDjxnViiDuNjRmlqG/fVmSRvAALAeHoH98AYDNbucDDZ/PZqwtobRrH4fG8VNAASVxPTol155UcvJBe728EK1gzyJVQ0UvS3dWiBo4+OvWpI9/5f+ITYqObiT8lBRlnAgp0xLVGTnGle7tVwBydKTR20SgTzBkqDCJZd9EiC/tkxe/yfadLIASWiVtywbXaEsq6Gd7o0xwNOlkcliOp10rhmSG16el2OapwZBpnagusNvMU2g5Md8ibE6RYm+Aa68FCaDflgIMvB/3A=="
+  },
+  "session_1759609979333_ekiul9kx6": {
+    "authenticated": true,
+    "stringSession": "1BQANOTEuMTA4LjU2LjEzOAG7cgbAmSVnv9KEzosL2pmJabY5fX+ct5dZYk7bfR1v90KDJmGxZbZDnU4VmRqoUpUULiojoCpGR63cGeJq88fwLDBosu4mdXWdG9JNxXGjiNVpY7PqQzXFj/mCP3uK5Zncwg+oroPte2WTQo+HIJ88C1JjfB8zyaMf63OWJlRSbIsMYYdJEwf2mQu055BWgrpwWtCY1BVo09OE4HA5icfHJJifVZ4nCfNmDTiaH5e3WkEWPIUQ0BWK3NsqOKpRVSv2GaBLZObVMNJ/y9krh41YiAz5W5SgLAHfbMD5VnanKY8vgLXjmpWetTyW6jWbSIejyg6Dc/uzT5vw7cljfoAz8g==",
     "user": {
       "id": "7650869672",
       "firstName": "你瞅啥",
@@ -80,6 +175,19 @@
       "phone": "8615923228581"
     },
     "authMethod": "phone",
-    "lastUpdated": 1759398484324
+    "lastUpdated": 1759610064214
+  },
+  "session_1759634819330_fnedz37i6": {
+    "authenticated": true,
+    "stringSession": "1BQANOTEuMTA4LjU2LjEzOAG7M/D4MGnCaPlI5QQARKr69pryoYEZ0KMrMpLsh78ynPw+cA0LseYKZWFsi1zCTgmW6S6gTr2yvMxX7aADjXTC80OZT2nXK8h21nWsErfaJ4siWDwaLoLOkYfI0pwmCeOVQ2Jf+fW1TyrYyOsqs1x8ArO9U9hkQDWSApKz+nUbqVp3I18+ft+qkvSaEEc3pTPC1SJczfqz8vXfHnjqjJn7BQOuyxk6rlanuLKbEA3Jle8y6lMLXm0GN+WmBC/4+ih7nrTxmCFl/QxINQpKrzbo7ILouGzxPF/uHuKTulH6knjm+A5kUKSL35/RdfJg9NuDA3DNREPo3uZDQ2NmcRe4Ww==",
+    "user": {
+      "id": "8141884827",
+      "firstName": "沙币真多",
+      "lastName": null,
+      "username": "yuzishao6",
+      "phone": "8619124258468"
+    },
+    "authMethod": "phone",
+    "lastUpdated": 1759634899072
   }
 }

@@ -19,6 +19,7 @@
     "express": "^5.1.0",
     "form-data": "^4.0.0",
     "fs-extra": "^11.3.1",
+    "ioredis": "^5.8.0",
     "multer": "^2.0.2",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.1",
