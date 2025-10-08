@@ -27,12 +27,12 @@
     "userId": "8141884827",
     "plan": "svip",
     "dailyLimit": 100,
-    "dailyUsed": 6,
-    "dailyResetAt": 1759766400000,
-    "bigFileCredits": 4994,
+    "dailyUsed": 31,
+    "dailyResetAt": 1759852800000,
+    "bigFileCredits": 4979,
     "maxFileBytes": 4294967296,
     "allowPrivate": true,
     "createdAt": 1759641912300,
-    "updatedAt": 1759835272639
+    "updatedAt": 1759907425135
   }
 }

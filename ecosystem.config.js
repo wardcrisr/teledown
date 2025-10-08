@@ -34,11 +34,18 @@ module.exports = {
         QUEUE_CONCURRENCY: "6",
         // Keep worker warm to eliminate handshake latency
         SANDBOX_TTL_MIN: "120",
+        // Keep sandbox workers always on (no TTL autokill)
+        SANDBOX_ALWAYS_ON: "1",
+        // Prewarm up to N bound chats on process start
+        SANDBOX_PREWARM_LIMIT: "6",
         // Fast start: start download immediately without queue if free
         BOT_FAST_START: "1",
         // Eager start: don't block on meta fetch & limits before starting
         BOT_EAGER_START: "1",
-        BOT_PROGRESS_DEBUG: "0",
+        BOT_PROGRESS_DEBUG: "1",
+        // Parallel chunk download tuning
+        TG_DL_WORKERS: "8",
+        TG_DL_PART_SIZE_KB: "1024",
         REDIS_URL: "redis://127.0.0.1:6379",
         ADMIN_SECRET: "secret",
         ADMIN_USER: "admin",

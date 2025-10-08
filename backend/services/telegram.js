@@ -1368,6 +1368,8 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
         
         console.log(`Download attempt ${attempt + 1}/${maxRetries} for ${fileName}`);
         
+        const workers = parseInt(process.env.TG_DL_WORKERS || process.env.DOWNLOAD_WORKERS || '4', 10);
+        const partSizeKB = parseInt(process.env.TG_DL_PART_SIZE_KB || process.env.DOWNLOAD_PART_SIZE_KB || '512', 10);
         const buffer = await client.downloadMedia(message.media, {
           progressCallback: (received, total) => {
             const progress = (received / total) * 100;
@@ -1378,7 +1380,9 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
                 throw new Error('Download cancelled by user');
               }
             }
-          }
+          },
+          workers,
+          partSizeKB
         });
 
         await fsExtra.writeFile(filePath, buffer);
@@ -1566,8 +1570,12 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
     for (; attempt < maxRetries; attempt++) {
       try {
         const message = attempt === 0 ? initial : await fetchMessage();
+        // Prefer passing the concrete media object to improve progress callback reliability
+        const media = message.media || message;
         // Use TelegramClient.downloadMedia with outputFile to stream directly to file
-        const resultPath = await client.downloadMedia(message, {
+        const workers = parseInt(process.env.TG_DL_WORKERS || process.env.DOWNLOAD_WORKERS || '4', 10);
+        const partSizeKB = parseInt(process.env.TG_DL_PART_SIZE_KB || process.env.DOWNLOAD_PART_SIZE_KB || '512', 10);
+        const resultPath = await client.downloadMedia(media, {
           outputFile: finalPath,
           progressCallback: (received, total) => {
             if (progressCallback) {
@@ -1576,7 +1584,9 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
                 throw new Error('Download cancelled by user');
               }
             }
-          }
+          },
+          workers,
+          partSizeKB
         });
 
         // downloadMedia with outputFile returns the path string
@@ -1625,11 +1635,25 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
     if (m1) {
       const internal = m1[1];
       msgId = parseInt(m1[2], 10);
-      entity = await client.getEntity(BigInt(`-100${internal}`));
+      const fullId = BigInt(`-100${internal}`);
+      try {
+        entity = await client.getEntity(fullId);
+      } catch (_) {
+        // 冷启动时 entity 缓存可能为空，先拉取 dialogs 再重试
+        try { await client.getDialogs(); entity = await client.getEntity(fullId); } catch (ee) {
+          throw new Error('Could not find the input entity for channel; please ensure the account has joined this chat');
+        }
+      }
     } else if (m2) {
       const username = m2[1];
       msgId = parseInt(m2[2], 10);
-      entity = await client.getEntity(username);
+      try {
+        entity = await client.getEntity(username);
+      } catch (_) {
+        try { await client.getDialogs(); entity = await client.getEntity(username); } catch (ee) {
+          throw new Error('Could not resolve username entity; please ensure the account can access this channel');
+        }
+      }
     } else {
       throw new Error('Unsupported link format');
     }
@@ -1642,8 +1666,18 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
     let inferredName = (fileAttr?.fileName || `video_${msgId}.mp4`).toString();
     if (!/\.[A-Za-z0-9]{2,5}$/.test(inferredName)) inferredName += '.mp4';
     const displayName = inferredName.replace(/[\\/\0]/g, '_').replace(/[<>:"|?*]/g, '_').replace(/\s+/g, ' ').trim();
+    // Robust size extraction across GramJS versions
     const sizeBI = doc?.size;
-    const size = sizeBI && typeof sizeBI.toJSNumber === 'function' ? sizeBI.toJSNumber() : undefined;
+    let size;
+    if (sizeBI != null) {
+      if (typeof sizeBI === 'number') size = sizeBI;
+      else if (typeof sizeBI.toJSNumber === 'function') size = sizeBI.toJSNumber();
+      else if (typeof sizeBI.toNumber === 'function') size = sizeBI.toNumber();
+      else {
+        const n = Number(sizeBI);
+        size = Number.isFinite(n) ? n : undefined;
+      }
+    }
     return {
       displayName,
       size,
@@ -2074,6 +2108,8 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
         
         console.log(`Download to path attempt ${attempt + 1}/${maxRetries} for ${fileName}`);
         
+        const workers = parseInt(process.env.TG_DL_WORKERS || process.env.DOWNLOAD_WORKERS || '4', 10);
+        const partSizeKB = parseInt(process.env.TG_DL_PART_SIZE_KB || process.env.DOWNLOAD_PART_SIZE_KB || '512', 10);
         const buffer = await client.downloadMedia(message.media, {
           progressCallback: (received, total) => {
             const progress = (received / total) * 100;
@@ -2084,7 +2120,9 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
                 throw new Error('Download cancelled by user');
               }
             }
-          }
+          },
+          workers,
+          partSizeKB
         });
 
         await fsExtra.writeFile(targetPath, buffer);

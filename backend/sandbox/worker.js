@@ -19,6 +19,16 @@ sessionId = msg.sessionId;
 try { await telegramService.restoreSession(sessionId); } catch (_) {}
 return;
 }
+    if (msg.type === 'warm') {
+      // 触发一次轻量 API 调用，确保 DC 连接建立并缓存对话列表
+      try {
+        await telegramService.getChannels(sessionId).catch(() => null);
+        process.send && process.send({ type: 'warm_ok' });
+      } catch (_) {
+        process.send && process.send({ type: 'warm_ok' });
+      }
+      return;
+    }
     if (msg.type === 'download') {
 if (!sessionId) throw new Error('sandbox not initialized');
 const link = msg.link;

@@ -232,6 +232,33 @@ const EDIT_MAX_RETRY = 3; // retry when Telegram rejects edit
 const PROG_DEBUG = process.env.BOT_PROGRESS_DEBUG === '1';
 const MAX_QUEUE_SIZE = 12; // 防止无限堆积
 
+async function tryDeleteProgressMessage(chatId, fallbackId, attempts = 3) {
+  // 组合可能的消息ID：当前跟踪ID + 初始ID
+  const ids = new Set();
+  try { const tracked = progressTracker.get(chatId); if (tracked) ids.add(tracked); } catch (_) {}
+  if (fallbackId) ids.add(fallbackId);
+  if (ids.size === 0) return;
+  for (let i = 0; i < attempts; i++) {
+    for (const id of ids) {
+      try {
+        const r = await deleteMessage(chatId, id);
+        if (process.env.BOT_PROGRESS_DEBUG === '1') {
+          try { console.log(`[DEL] chat ${chatId} msg ${id} -> ${(r && r.data && r.data.ok) ? 'ok' : 'resp'}`); } catch (_) {}
+        }
+        if (!r || (r.data && r.data.ok)) { return; }
+      } catch (e) {
+        const desc = e?.response?.data?.description || '';
+        // 如果已经不存在/无法删除，视为已清理；避免残留重试
+        if (typeof desc === 'string' && (desc.includes('message to delete not found') || desc.includes("can't be deleted"))) {
+          return;
+        }
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+    await new Promise(r => setTimeout(r, 800));
+  }
+}
+
 async function queueEdit(chatId, messageId, text) {
   const key = `${chatId}:${messageId}`;
   let state = editQueues.get(key);
@@ -340,6 +367,22 @@ function prettyMB(bytes) {
   if (!Number.isFinite(n) || n <= 0) return '0 MB';
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
+function prettySpeed(bps) {
+  const n = Number(bps || 0);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const mbps = n / (1024 * 1024);
+  if (mbps >= 0.1) return `${mbps.toFixed(2)} MB/s`;
+  const kbps = n / 1024;
+  return `${kbps.toFixed(0)} KB/s`;
+}
+function formatETA(sec) {
+  const s = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  const pad = (x) => String(x).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`;
+}
 function makeBar(percent) {
   const width = 22; // characters
   const p = Math.max(0, Math.min(100, percent || 0));
@@ -353,13 +396,15 @@ function escapeHtml(s = '') {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
-function makeProgressTemplate({ link, stage = 'download', index = 1, totalCount = 1, fileName, received = 0, total = 0 }) {
+function makeProgressTemplate({ link, stage = 'download', index = 1, totalCount = 1, fileName, received = 0, total = 0, status = '', speedText = '', percentOverride = null }) {
   // stage: 'download' -> 样式1（正在提取/已提取）；'send' -> 样式2（正在上传/已上传）
   const top = stage === 'download' ? '📥 正在提取' : '📬 正在上传';
   const bottom = stage === 'download' ? '🖨️ 已提取：' : '🚀 已上传：';
   const r = toNum(received);
   const t = toNum(total);
-  const percent = t ? (r / t) * 100 : 0;
+  const percent = (typeof percentOverride === 'number' && Number.isFinite(percentOverride))
+    ? Math.max(0, Math.min(100, percentOverride))
+    : (t ? (r / t) * 100 : 0);
   const bar = makeBar(percent);
   const name = escapeHtml(fileName || '获取文件名中…');
   const ln = escapeHtml(link || '');
@@ -367,9 +412,10 @@ function makeProgressTemplate({ link, stage = 'download', index = 1, totalCount 
   const tot = t ? prettyMB(t) : '未知';
   return (
     `${ln}\n` +
-    `📦 ${top}第 ${index}/${totalCount} 个文件\n\n` +
+    `📦 ${top}${status ? ' ' + status : ''}第 ${index}/${totalCount} 个文件\n\n` +
     `📁 <code>${name}</code>\n\n` +
-    `${bar}\n\n` +
+    `${bar}\n` +
+    (speedText ? `\n${speedText}\n` : '\n') +
     `${bottom} <b>${recv}</b> / <b>${tot}</b>`
   );
 }
@@ -526,6 +572,32 @@ router.post('/webhook', async (req, res) => {
       });
       const sent = await sendMessage(chatId, initial, 'HTML', { noReplyKeyboard: true });
       progressMsgId = sent?.data?.result?.message_id || null;
+
+      // 即使启用了 BOT_EAGER_START（跳过阻塞式 meta 获取），也在后台并行获取
+      // 元数据，拿到后立刻刷新进度卡片以显示 文件名/总大小。
+      if (!meta) {
+        (async () => {
+          try {
+            const m = await telegramService.getMessageMetaFromLink(await getWorkingSessionId(chatId), text).catch(() => null);
+            if (m && progressMsgId) {
+              // 更新初始卡片，补充文件名与总大小
+              let card = makeProgressTemplate({
+                link: text,
+                stage: 'download',
+                index: 1,
+                totalCount: 1,
+                fileName: m.displayName,
+                received: 0,
+                total: m.size || 0,
+              });
+              try { card += (Date.now() % 2 === 0 ? '\u2063' : '\u2060'); } catch (_) {}
+              queueEdit(chatId, progressMsgId, card).catch(() => {});
+              // 将 meta 写回，便于后续发送阶段使用
+              meta = m;
+            }
+          } catch (_) {}
+        })();
+      }
     }
 
     // 额度与限额校验与预扣
@@ -704,9 +776,37 @@ async function processQueuedTask(task) {
     activeTasks.set(chatId, taskState);
 
     let lastBytes = 0;
+    let speedAvgBps = 0;
+    let lastSpeedTs = Date.now();
+    let lastSpeedBytes = 0;
+    // 用于统一估算总大小：优先使用下载器提供的 total，其次使用 meta.size
+    let estTotal = Number(meta?.size || 0) || 0;
     let lastTs = Date.now();
     let result = null;
     const maxRetry = Math.max(0, DOWNLOAD_MAX_RETRY);
+
+    // 预热阶段：在真正的下载进度出现前，用一个小旋转标记告诉用户“正在准备”
+    let progressStarted = false;
+    let spinIdx = 0;
+    const SPIN = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+    const preTicker = progressMsgId ? setInterval(() => {
+      try {
+        if (progressStarted) return;
+        let t = Number(meta?.size || 0);
+        let card = makeProgressTemplate({
+          link: text,
+          stage: 'download',
+          index: 1,
+          totalCount: 1,
+          fileName: meta?.displayName || '获取文件名中…',
+          received: 0,
+          total: t,
+          status: `${SPIN[spinIdx++ % SPIN.length]} 准备中…`
+        });
+        try { card += (Date.now() % 2 === 0 ? '\u2063' : '\u2060'); } catch (_) {}
+        queueEdit(chatId, progressMsgId, card).catch(() => {});
+      } catch (_) {}
+    }, 900) : null;
 
     for (let attempt = 0; attempt <= maxRetry; attempt++) {
       let stalledTriggered = false;
@@ -719,6 +819,16 @@ async function processQueuedTask(task) {
           }
         } catch (_) {}
       }, 5000);
+      // Cancellation watcher: user may send /cancel anytime
+      const cancelWatcher = setInterval(() => {
+        try {
+          const st = activeTasks.get(chatId);
+          if (st && st.cancel) {
+            if (process.env.BOT_PROGRESS_DEBUG === '1') console.log(`[CANCEL] chat ${chatId} requested, destroying sandbox`);
+            try { sandboxManager.destroySandbox(chatId); } catch (_) {}
+          }
+        } catch (_) {}
+      }, 600);
 
       try {
         result = await sandboxManager.enqueueDownload(
@@ -728,14 +838,48 @@ async function processQueuedTask(task) {
           (received, total) => {
             try { if (process.env.BOT_PROGRESS_DEBUG === '1') console.log(`[PROG] chat ${chatId} recv=${received} total=${total}`); } catch(_) {}
             lastTs = Date.now();
-            if (typeof received === 'number' && received > lastBytes) lastBytes = received;
-            if (!progressMsgId) return;
+            progressStarted = true;
+            // Honor cancellation immediately
+            try { const st = activeTasks.get(chatId); if (st && st.cancel) return false; } catch (_) {}
+            // 统一估算总大小
+            if (typeof total === 'number' && total > 1) estTotal = Number(total);
+            if (!estTotal && meta?.size) estTotal = Number(meta.size) || 0;
+
+            // 规范化 received：既兼容字节数也兼容 [0,1] 比例
             let r = Number(received || 0);
-            let t = Number(total || 0);
-            if ((r > 0 && r <= 1) && (!t || t <= 1)) {
-              if (meta?.size) { t = Number(meta.size); r = Math.floor(t * r); }
+            let percentOverride = null;
+            if ((r > 0 && r <= 1) && estTotal > 0) {
+              r = Math.floor(estTotal * r);
+            } else if ((r > 0 && r <= 1) && (!estTotal || estTotal <= 1)) {
+              // 尚未知总大小时，先用比例直接驱动进度条，避免视觉“长时间 0%”
+              percentOverride = r * 100;
             }
-            if ((!t || t <= 1) && meta?.size) t = Number(meta.size);
+            if (typeof r === 'number' && r > lastBytes) lastBytes = r;
+            if (!progressMsgId) return;
+            let t = Number(total || 0);
+            if (!t || t <= 1) t = estTotal || 0;
+            // Clamp: 不允许显示“已提取 > 总大小”
+            if (t && t > 1 && r > t) r = t;
+            // 计算速度与 ETA（指数平滑）
+            let speedText = '';
+            try {
+              const now2 = Date.now();
+              const dt = now2 - lastSpeedTs;
+              if (dt >= 400) {
+                const diff = Math.max(0, r - lastSpeedBytes);
+                const inst = diff / (dt / 1000);
+                speedAvgBps = speedAvgBps ? (0.7 * speedAvgBps + 0.3 * inst) : inst;
+                lastSpeedTs = now2; lastSpeedBytes = r;
+              }
+              if (speedAvgBps > 0) {
+                const remain = t && t > 0 ? Math.max(0, t - r) : 0;
+                const eta = remain && speedAvgBps ? remain / speedAvgBps : 0;
+                const s = prettySpeed(speedAvgBps);
+                speedText = s ? `⚡ ${s}${eta ? ` · 剩余 ${formatETA(eta)}` : ''}` : '';
+              }
+            } catch (_) {}
+            // 记录给 /status 使用
+            try { const st = activeTasks.get(chatId); if (st) { st.current = r; st.total = t || st.total || 0; } } catch (_) {}
   let textCard = makeProgressTemplate({
               link: text,
               stage: 'download',
@@ -744,6 +888,8 @@ async function processQueuedTask(task) {
               fileName: meta?.displayName || '获取文件名中…',
               received: r,
               total: t,
+              speedText,
+              percentOverride,
             });
   // 为避免 Telegram 报 "message is not modified"，在文本末尾附加不可见字符作“心跳”
   try { textCard += (Date.now() % 2 === 0 ? '\u2063' : '\u2060'); } catch (_) {}
@@ -751,9 +897,22 @@ async function processQueuedTask(task) {
           }
         );
         clearInterval(watchdog);
+        clearInterval(cancelWatcher);
+        if (preTicker) { try { clearInterval(preTicker); } catch (_) {} }
         break; // success
       } catch (e) {
         clearInterval(watchdog);
+        clearInterval(cancelWatcher);
+        if (preTicker) { try { clearInterval(preTicker); } catch (_) {} }
+        // Cancellation: do not retry, clean up and notify
+        const em = (e && e.message) ? String(e.message) : '';
+        if (/cancelled|destroyed/i.test(em)) {
+          try { await tryDeleteProgressMessage(chatId, progressMsgId, 3); } catch (_) {}
+          try { progressTracker.delete(chatId); } catch (_) {}
+          try { await sendMessage(chatId, '已取消当前下载任务。'); } catch (_) {}
+          activeTasks.delete(chatId);
+          return; // stop processing
+        }
         if (attempt >= maxRetry) throw e;
         // 小退避后重试
         await new Promise(r => setTimeout(r, 1500));
@@ -765,10 +924,14 @@ async function processQueuedTask(task) {
     const publicPath = `/bot/${path.basename(result.filePath)}`;
     const publicUrl = publicBase ? `${publicBase}${publicPath}` : publicPath;
 
+    // 若在下载完成后才收到取消请求，则直接终止发送并清理
+    try { const st = activeTasks.get(chatId); if (st && st.cancel) { try { await tryDeleteProgressMessage(chatId, progressMsgId, 3); } catch(_) {} ; activeTasks.delete(chatId); try { fs.unlinkSync(result.filePath); } catch(_) {}; try { await sendMessage(chatId, '已取消当前下载任务。'); } catch(_) {}; return; } } catch (_) {}
+
     let sendRes;
     let uploadedLocal = false;
     try {
       let lastUpPct = 0; let lastUpTs = 0;
+      let upSpeedAvgBps = 0; let lastUpBytesVal = 0; let lastUpSpeedTs = Date.now();
       let thumbBuffer = null;
       try { thumbBuffer = await telegramService.getThumbnailFromMessageLink(sessionId, text, 'm'); } catch (_) {}
 
@@ -783,15 +946,34 @@ async function processQueuedTask(task) {
           if (pct >= lastUpPct + 1 || now - lastUpTs > 1500) {
             lastUpPct = pct; lastUpTs = now;
             if (progressMsgId) {
+              // 上传速度与 ETA
+              let upText = '';
+              try {
+                const dt = now - lastUpSpeedTs;
+                if (dt >= 400) {
+                  const diff = Math.max(0, sentBytes - lastUpBytesVal);
+                  const inst = diff / (dt / 1000);
+                  upSpeedAvgBps = upSpeedAvgBps ? (0.7 * upSpeedAvgBps + 0.3 * inst) : inst;
+                  lastUpSpeedTs = now; lastUpBytesVal = sentBytes;
+                }
+                if (upSpeedAvgBps > 0) {
+                  const remain = totalBytes && totalBytes > 0 ? Math.max(0, totalBytes - sentBytes) : 0;
+                  const eta = remain && upSpeedAvgBps ? remain / upSpeedAvgBps : 0;
+                  const s = prettySpeed(upSpeedAvgBps);
+                  upText = s ? `⚡ ${s}${eta ? ` · 剩余 ${formatETA(eta)}` : ''}` : '';
+                }
+              } catch (_) {}
           let card = makeProgressTemplate({
                 link: text,
                 stage: 'send',
                 index: 1,
                 totalCount: 1,
                 fileName: result.displayName || result.fileName,
-                received: sentBytes,
-                total: totalBytes
+                received: totalBytes && sentBytes > totalBytes ? totalBytes : sentBytes,
+                total: totalBytes,
+                speedText: upText
               });
+              try { const st = activeTasks.get(chatId); if (st) { st.current = totalBytes && sentBytes > totalBytes ? totalBytes : sentBytes; st.total = totalBytes || st.total || 0; } } catch (_) {}
               try { card += (Date.now() % 2 === 0 ? '\u2063' : '\u2060'); } catch (_) {}
               const trackedId = getTrackedMessageId(chatId, progressMsgId);
               if (trackedId) {
@@ -820,9 +1002,8 @@ async function processQueuedTask(task) {
     if (sendRes?.data?.ok && !uploadedLocal) {
       scheduleDelete(result.filePath);
     }
-    const toDeleteId = getTrackedMessageId(chatId, progressMsgId);
-    if (toDeleteId && sendRes?.data?.ok) {
-      try { await deleteMessage(chatId, toDeleteId); } catch (_) {}
+    if (sendRes?.data?.ok) {
+      try { await tryDeleteProgressMessage(chatId, progressMsgId, 4); } catch (_) {}
       try { progressTracker.delete(chatId); } catch (_) {}
     }
     if (!sendRes?.data?.ok) {
@@ -874,4 +1055,18 @@ setImmediate(() => {
   for (let i = 0; i < n; i++) {
     try { consumeQueue(); } catch (_) {}
   }
+});
+// 在进程启动时预热已绑定聊天的 sandbox，以保持会话常驻并减少首包延迟
+setImmediate(() => {
+  try {
+    const PREWARM_LIMIT = parseInt(process.env.SANDBOX_PREWARM_LIMIT || '6', 10);
+    let count = 0;
+    for (const [cid, sid] of Object.entries(chatSessions)) {
+      if (!sid) continue;
+      try {
+        sandboxManager.ensureSandbox(cid, sid);
+      } catch (_) {}
+      if (++count >= PREWARM_LIMIT) break;
+    }
+  } catch (_) {}
 });
