@@ -44,10 +44,29 @@ router.get('/users', async (req, res) => {
 router.post('/users/setPlan', async (req, res) => {
   if (!assertAdmin(req, res)) return;
   try {
-    const { userId, plan } = req.body || {};
+    const { userId, plan, forceResetCredits } = req.body || {};
     if (!userId || !plan) return res.status(400).json({ error: 'userId and plan required' });
-    const u = await userStore.setPlan(userId, plan);
+    const u = await userStore.setPlan(userId, plan, { forceResetCredits: !!forceResetCredits });
     res.json({ ok: true, user: u });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+// Bulk migrate SVIP users to new defaults (2000MB, 3000 credits)
+router.post('/users/migrateDefaults', async (req, res) => {
+  if (!assertAdmin(req, res)) return;
+  try {
+    const { plan = 'svip', force = true } = req.body || {};
+    const list = await userStore.list();
+    let changed = 0;
+    for (const u of list) {
+      if (String(u.plan) === String(plan)) {
+        await userStore.setPlan(u.userId, plan, { forceResetCredits: !!force });
+        changed += 1;
+      }
+    }
+    res.json({ ok: true, changed });
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
   }
@@ -97,5 +116,4 @@ router.post('/progress/clear', async (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message || String(e) }); }
 });
-
 

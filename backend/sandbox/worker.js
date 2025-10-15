@@ -2,6 +2,8 @@ const path = require('path');
 const fs = require('fs');
 const telegramService = require('../services/telegram');
 
+function WDBG(...args) { try { if (process.env.DL_HIDE_NOISY === '1') return; if (process.env.DL_DEBUG === '1') console.log('[SBXW]', ...args); } catch (_) {} }
+
 let sessionId = null;
 let cumulativeReceived = 0;
 let fsWatchTimer = null;
@@ -17,6 +19,7 @@ if (!msg || typeof msg !== 'object') return;
 if (msg.type === 'init') {
 sessionId = msg.sessionId;
 try { await telegramService.restoreSession(sessionId); } catch (_) {}
+WDBG('init', { sessionId });
 return;
 }
     if (msg.type === 'warm') {
@@ -35,6 +38,7 @@ const link = msg.link;
 const dir = path.join(process.cwd(), 'downloads', 'sbx');
 fs.mkdirSync(dir, { recursive: true });
 const target = path.join(dir, `dl_${Date.now()}_${Math.random().toString(36).slice(2)}.bin`);
+      WDBG('download', { sessionId, link, target });
       cumulativeReceived = 0;
       // Start a 1s directory-size watcher (fallback). Note: telegramService chooses a safe
       // final file name inside the same directory, not necessarily `target`. We therefore
@@ -57,7 +61,15 @@ const target = path.join(dir, `dl_${Date.now()}_${Math.random().toString(36).sli
         } catch (_) {}
       }, 1000);
       const result = await telegramService.downloadFromMessageLinkToPath(sessionId, link, target, (received, total) => {
-        try { if (process.env.BOT_PROGRESS_DEBUG === '1') console.log(`[SBX] callback received=${received} total=${total}`); } catch (_) {}
+        try {
+          if (
+            process.env.BOT_PROGRESS_DEBUG === '1' &&
+            process.env.DL_HIDE_NOISY !== '1' &&
+            process.env.DL_HIDE_SBX !== '1'
+          ) {
+            console.log(`[SBX] callback received=${received} total=${total}`);
+          }
+        } catch (_) {}
         // Normalize different GramJS progress callback variants
         let r = Number(received || 0);
         const t = Number(total || 0);
@@ -84,10 +96,12 @@ const target = path.join(dir, `dl_${Date.now()}_${Math.random().toString(36).sli
         }
       } catch (_) {}
       try { if (fsWatchTimer) { clearInterval(fsWatchTimer); fsWatchTimer = null; } } catch (_) {}
+      WDBG('done', { sessionId, path: result && result.filePath, size: result && result.size });
       process.send && process.send({ type: 'done', result });
 }
 } catch (e) {
     try { if (fsWatchTimer) { clearInterval(fsWatchTimer); fsWatchTimer = null; } } catch (_) {}
+WDBG('error', { sessionId, error: e && e.message, stack: e && e.stack && e.stack.split('\n')[0] });
 process.send && process.send({ type: 'error', error: e && e.message || String(e) });
 }
 });

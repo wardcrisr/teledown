@@ -8,7 +8,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const PLAN_DEFAULTS = {
   free: { dailyLimit: 1, bigFileCredits: 0, maxFileBytes: Infinity, allowPrivate: false },
   vip: { dailyLimit: 30, bigFileCredits: 1000, maxFileBytes: 200 * 1024 * 1024, allowPrivate: false },
-  svip: { dailyLimit: 100, bigFileCredits: 5000, maxFileBytes: 4 * 1024 * 1024 * 1024, allowPrivate: true },
+  // SVIP: 大文件额度 3000；单文件上限 2000MB
+  svip: { dailyLimit: 100, bigFileCredits: 3000, maxFileBytes: 2000 * 1024 * 1024, allowPrivate: true },
 };
 
 function nowDayStart() {
@@ -65,15 +66,28 @@ class UserStore {
     return u;
   }
 
-  async setPlan(userId, plan) {
+  // Ensure user exists and persist to disk if newly created
+  async ensureSaved(userId) {
+    const key = String(userId);
+    const existed = !!this.users[key];
+    const u = this._ensure(userId);
+    if (!existed) await this._save();
+    return u;
+  }
+
+  async setPlan(userId, plan, opts = {}) {
     const u = this._ensure(userId);
     const d = PLAN_DEFAULTS[plan] || PLAN_DEFAULTS.free;
     u.plan = plan;
     u.dailyLimit = d.dailyLimit;
     u.maxFileBytes = d.maxFileBytes;
     u.allowPrivate = d.allowPrivate;
-    if (u.bigFileCredits == null || u.bigFileCredits < d.bigFileCredits) {
+    if (opts && opts.forceResetCredits) {
       u.bigFileCredits = d.bigFileCredits;
+    } else {
+      if (u.bigFileCredits == null || u.bigFileCredits < d.bigFileCredits) {
+        u.bigFileCredits = d.bigFileCredits;
+      }
     }
     u.updatedAt = Date.now();
     await this._save();
@@ -139,5 +153,3 @@ class UserStore {
 }
 
 module.exports = new UserStore();
-
-

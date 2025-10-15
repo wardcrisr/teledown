@@ -5,6 +5,14 @@ const fs = require('fs');
 const fsExtra = require('fs-extra');
 const QRCode = require('qrcode');
 const sessionStore = require('./sessionStore');
+const crypto = require('crypto');
+
+function DLDBG(...args) {
+  try { if (process.env.DL_DEBUG === '1') console.log('[DL]', ...args); } catch (_) {}
+}
+function fp(val) {
+  try { return crypto.createHash('sha1').update(String(val || '')).digest('hex').slice(0, 10); } catch (_) { return 'na'; }
+}
 
 // Global promise management for REST API authentication
 let globalPromises = new Map();
@@ -107,7 +115,12 @@ class TelegramService {
               stringSession: sessionString,
               user: sessionData.user
             });
-            
+            DLDBG('session restored', {
+              sessionId,
+              userId: sessionData.user?.id?.toString?.() || sessionData.user?.id || null,
+              username: sessionData.user?.username || null,
+              fp: fp(sessionString)
+            });
             restoredCount++;
             console.log(`Session ${sessionId} restored successfully`);
           } catch (error) {
@@ -157,6 +170,12 @@ class TelegramService {
       };
       
       this.sessions.set(sessionId, sessionData);
+      DLDBG('session restored on-demand', {
+        sessionId,
+        userId: storedSession.user?.id?.toString?.() || storedSession.user?.id || null,
+        username: storedSession.user?.username || null,
+        fp: fp(sessionString)
+      });
       console.log(`Session ${sessionId} restored on-demand successfully`);
       
       return sessionData;
@@ -1483,8 +1502,8 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
   
   // Download media pointed by a Telegram message link to a local path
   // Supports links: https://t.me/c/<internal>/<msgId> and https://t.me/<username>/<msgId>
-  // This implementation streams directly to disk and retries on transient errors
-  // to avoid hanging mid-download (e.g., FILE_REFERENCE_EXPIRED / network hiccups).
+  // Implementation uses iterDownload to stream chunks to disk and report progress
+  // reliably. Retries on transient RPC errors by refreshing file reference.
   async downloadFromMessageLinkToPath(sessionId, link, targetPath, progressCallback) {
     await this.ensureInitialized();
     let sessionData = this.sessions.get(sessionId);
@@ -1526,11 +1545,36 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       throw new Error('Unsupported link format');
     }
 
+    DLDBG('download start', { sessionId, link, targetPath, msgId });
     // Helper to fetch latest Message (refreshes fileReference if needed)
     const fetchMessage = async () => {
       const messages = await client.getMessages(entity, { ids: [msgId] });
       const message = messages?.[0];
       if (!message || !message.media) throw new Error('Message or media not found');
+      try {
+        if (message.media.className === 'MessageMediaDocument') {
+          const doc = message.media.document;
+          DLDBG('message fetched', {
+            sessionId,
+            msgId,
+            kind: 'document',
+            docId: doc?.id?.toString?.() || doc?.id,
+            dcId: doc?.dcId,
+            accessHash: doc?.accessHash?.toString?.() || doc?.accessHash,
+            fileRefLen: (doc?.fileReference && doc.fileReference.length) || 0
+          });
+        } else if (message.media.className === 'MessageMediaPhoto') {
+          const photo = message.media.photo;
+          DLDBG('message fetched', {
+            sessionId,
+            msgId,
+            kind: 'photo',
+            photoId: photo?.id?.toString?.() || photo?.id,
+            dcId: photo?.dcId,
+            fileRefLen: (photo?.fileReference && photo.fileReference.length) || 0
+          });
+        }
+      } catch (_) {}
       return message;
     };
 
@@ -1541,11 +1585,30 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
 
     // Inspect original filename if available
     const initial = await fetchMessage();
-    const doc0 = initial.media.document;
-    const fileAttr0 = doc0?.attributes?.find(a => a.className === 'DocumentAttributeFilename');
-    const videoAttr0 = doc0?.attributes?.find(a => a.className === 'DocumentAttributeVideo');
-    let inferredName = (fileAttr0?.fileName || `video_${msgId}.mp4`).toString();
-    if (!/\.[A-Za-z0-9]{2,5}$/.test(inferredName)) inferredName += '.mp4';
+    const isDoc = initial.media.className === 'MessageMediaDocument';
+    const isPhoto = initial.media.className === 'MessageMediaPhoto';
+    const originalCaption = (initial.message || initial.text || '') || null;
+
+    // Infer filename and meta
+    let inferredName;
+    let videoAttr0 = null;
+    let mimeGuess = undefined;
+    let originalFileName = null;
+    if (isDoc) {
+      const doc0 = initial.media.document;
+      const fileAttr0 = doc0?.attributes?.find(a => a.className === 'DocumentAttributeFilename');
+      videoAttr0 = doc0?.attributes?.find(a => a.className === 'DocumentAttributeVideo');
+      originalFileName = fileAttr0?.fileName || null;
+      inferredName = (originalFileName || `video_${msgId}.mp4`).toString();
+      if (!/\.[A-Za-z0-9]{2,5}$/.test(inferredName)) inferredName += '.mp4';
+      mimeGuess = doc0?.mimeType || undefined;
+    } else if (isPhoto) {
+      // Telegram photos are JPEG in practice; use .jpg
+      inferredName = `photo_${msgId}.jpg`;
+      mimeGuess = 'image/jpeg';
+    } else {
+      throw new Error('Unsupported media type');
+    }
     // Keep unicode characters (e.g., Chinese), only strip path separators and illegal characters
     const safeName = inferredName
       .replace(/[\\/\0]/g, '_')
@@ -1563,50 +1626,99 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       }
     } catch (_) {}
 
-    // Stream to disk with retries
+    // Stream to disk with retries, using iterDownload for reliable progress
     const maxRetries = 4;
-    let attempt = 0;
     let lastError;
-    for (; attempt < maxRetries; attempt++) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      let ws = null;
       try {
         const message = attempt === 0 ? initial : await fetchMessage();
-        // Prefer passing the concrete media object to improve progress callback reliability
-        const media = message.media || message;
-        // Use TelegramClient.downloadMedia with outputFile to stream directly to file
-        const workers = parseInt(process.env.TG_DL_WORKERS || process.env.DOWNLOAD_WORKERS || '4', 10);
-        const partSizeKB = parseInt(process.env.TG_DL_PART_SIZE_KB || process.env.DOWNLOAD_PART_SIZE_KB || '512', 10);
-        const resultPath = await client.downloadMedia(media, {
-          outputFile: finalPath,
-          progressCallback: (received, total) => {
+        if (message.media?.className === 'MessageMediaDocument') {
+          const doc = message.media.document;
+          const fileLocation = new Api.InputDocumentFileLocation({
+            id: doc.id,
+            accessHash: doc.accessHash,
+            fileReference: doc.fileReference,
+            thumbSize: ''
+          });
+          const requestSize = (parseInt(process.env.TG_DL_PART_SIZE_KB || process.env.DOWNLOAD_PART_SIZE_KB || '512', 10)) * 1024;
+          const totalSize = (doc.size && typeof doc.size.toNumber === 'function') ? doc.size.toNumber() : (doc.size || 0);
+
+          await fsExtra.ensureDir(pathMod.dirname(finalPath));
+          ws = fs.createWriteStream(finalPath);
+          let received = 0;
+          const iter = client.iterDownload({ file: fileLocation, requestSize, dcId: doc.dcId, fileSize: doc.size });
+
+          for await (const chunk of iter) {
+            received += chunk.length;
             if (progressCallback) {
-              const cont = progressCallback(received, total);
+              const cont = progressCallback(received, totalSize);
               if (cont === false) {
                 throw new Error('Download cancelled by user');
               }
             }
-          },
-          workers,
-          partSizeKB
-        });
+            if (!ws.write(chunk)) {
+              await new Promise(res => ws.once('drain', res));
+            }
+          }
+          await new Promise(res => ws.end(res));
 
-        // downloadMedia with outputFile returns the path string
-        const stat = await fsExtra.stat(resultPath);
-        return {
-          fileName: pathMod.basename(resultPath),
-          displayName: inferredName, // original for captions
-          filePath: resultPath,
-          size: stat.size,
-          duration: (videoAttr0 && typeof videoAttr0.duration === 'number') ? videoAttr0.duration : undefined,
-          width: (videoAttr0 && typeof videoAttr0.w === 'number') ? videoAttr0.w : undefined,
-          height: (videoAttr0 && typeof videoAttr0.h === 'number') ? videoAttr0.h : undefined,
-          mimeType: doc0?.mimeType || undefined
-        };
+          const stat = await fsExtra.stat(finalPath);
+          DLDBG('download complete', { sessionId, msgId, size: stat.size, path: finalPath });
+          return {
+            fileName: pathMod.basename(finalPath),
+            displayName: inferredName,
+            filePath: finalPath,
+            size: stat.size,
+            duration: (videoAttr0 && typeof videoAttr0.duration === 'number') ? videoAttr0.duration : undefined,
+            width: (videoAttr0 && typeof videoAttr0.w === 'number') ? videoAttr0.w : undefined,
+            height: (videoAttr0 && typeof videoAttr0.h === 'number') ? videoAttr0.h : undefined,
+            mimeType: mimeGuess,
+            originalFileName,
+            caption: originalCaption
+          };
+        } else if (message.media?.className === 'MessageMediaPhoto') {
+          // For photos, use the convenient downloadMedia which returns a buffer
+          const buffer = await client.downloadMedia(message.media, {
+            progressCallback: (received, total) => {
+              if (progressCallback) {
+                const cont = progressCallback(received, total);
+                if (cont === false) throw new Error('Download cancelled by user');
+              }
+            }
+          });
+          await fsExtra.ensureDir(pathMod.dirname(finalPath));
+          await fsExtra.writeFile(finalPath, buffer);
+          DLDBG('photo download complete', { sessionId, msgId, size: buffer.length, path: finalPath });
+          // Extract width/height if available
+          let w = 0, h = 0;
+          try {
+            const sizes = message.media.photo?.sizes || [];
+            const pick = sizes[sizes.length - 1];
+            if (pick) { w = pick.w || 0; h = pick.h || 0; }
+          } catch (_) {}
+          return {
+            fileName: pathMod.basename(finalPath),
+            displayName: null,
+            filePath: finalPath,
+            size: buffer.length,
+            width: w,
+            height: h,
+            mimeType: 'image/jpeg',
+            originalFileName: null,
+            caption: originalCaption
+          };
+        } else {
+          throw new Error('Message has unsupported media');
+        }
       } catch (error) {
         lastError = error;
-        const msg = (error && error.message) ? error.message : String(error);
-        const retriable = /FILE_REFERENCE_EXPIRED|FILE_REFERENCE_INVALID|FILE_ID_INVALID|TIMEOUT|NET|FLOOD_WAIT|RPC_CALL_FAIL/i.test(msg);
-        // Clean up partial file between attempts
+        try { if (ws) { try { ws.destroy(); } catch (_) {}; } } catch (_) {}
+        // Remove partial file between retries
         try { if (await fsExtra.pathExists(finalPath)) await fsExtra.unlink(finalPath); } catch (_) {}
+        const msg = (error && error.message) ? error.message : String(error);
+        const retriable = /FILE_REFERENCE_EXPIRED|FILE_REFERENCE_INVALID|FILE_ID_INVALID|TIMEOUT|NET|FLOOD_WAIT|RPC_CALL_FAIL|CANCELLED/i.test(msg);
+        DLDBG('download error', { sessionId, msgId, attempt, retriable, error: msg, stack: (error && error.stack) ? String(error.stack).split('\n')[0] : undefined });
         if (!retriable || attempt === maxRetries - 1) break;
         const delay = Math.min(30000, (2 ** attempt) * 1000);
         await new Promise(r => setTimeout(r, delay));
@@ -1657,10 +1769,32 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
     } else {
       throw new Error('Unsupported link format');
     }
+    DLDBG('peek meta', { sessionId, link, msgId });
     const messages = await client.getMessages(entity, { ids: [msgId] });
     const message = messages?.[0];
-    if (!message || !message.media || message.media.className !== 'MessageMediaDocument') return null;
+    const caption = (message && (message.message || message.text)) ? (message.message || message.text) : null;
+    if (!message || !message.media) return null;
+    if (message.media.className === 'MessageMediaPhoto') {
+      const photo = message.media.photo;
+      // Pick the largest available size (last is usually the largest)
+      const sizes = photo?.sizes || [];
+      const pick = sizes.length ? sizes[sizes.length - 1] : null;
+      // Photos have no original filename in Telegram schema.
+      const displayName = null;
+      const size = pick?.size || 0;
+      return {
+        displayName,
+        size,
+        width: pick?.w || 0,
+        height: pick?.h || 0,
+        mimeType: 'image/jpeg',
+        originalFileName: null,
+        caption
+      };
+    }
+    if (message.media.className !== 'MessageMediaDocument') return null;
     const doc = message.media.document;
+    try { DLDBG('meta doc', { docId: doc?.id?.toString?.() || doc?.id, dcId: doc?.dcId, fileRefLen: (doc?.fileReference && doc.fileReference.length) || 0 }); } catch (_) {}
     const fileAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeFilename');
     const videoAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeVideo');
     let inferredName = (fileAttr?.fileName || `video_${msgId}.mp4`).toString();
@@ -1685,6 +1819,8 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       width: (videoAttr && typeof videoAttr.w === 'number') ? videoAttr.w : undefined,
       height: (videoAttr && typeof videoAttr.h === 'number') ? videoAttr.h : undefined,
       mimeType: doc?.mimeType || undefined,
+      originalFileName: fileAttr?.fileName || null,
+      caption
     };
   }
 
@@ -1737,6 +1873,169 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
       const buffer = await client.downloadFile({ file: fileLocation, dcId: doc.dcId });
       if (buffer && buffer.length > 0) return buffer;
     } catch (_) { /* ignore */ }
+    return null;
+  }
+
+  // Extract an album (media group) and text from a message link like
+  // https://t.me/<username>/<msgId>?single or https://t.me/c/<internal>/<msgId>?single
+  // Returns { channelId: string, items: [{ id, kind: 'photo'|'video' }...], caption }
+  async getAlbumFromMessageLink(sessionId, link) {
+    await this.ensureInitialized();
+    let sessionData = this.sessions.get(sessionId);
+    if (!sessionData) sessionData = await this.restoreSession(sessionId);
+    if (!sessionData || !sessionData.authenticated) {
+      throw new Error('User not authenticated');
+    }
+
+    const { client } = sessionData;
+    const m1 = link.match(/https?:\/\/t\.me\/c\/(\d+)\/(\d+)/i);
+    const m2 = link.match(/https?:\/\/t\.me\/([A-Za-z0-9_]{4,})\/(\d+)/i);
+    let entity; let msgId;
+    if (m1) {
+      msgId = parseInt(m1[2], 10);
+      const fullId = BigInt(`-100${m1[1]}`);
+      try { entity = await client.getEntity(fullId); }
+      catch (_) { await client.getDialogs(); entity = await client.getEntity(fullId); }
+    } else if (m2) {
+      msgId = parseInt(m2[2], 10);
+      try { entity = await client.getEntity(m2[1]); }
+      catch (_) { await client.getDialogs(); entity = await client.getEntity(m2[1]); }
+    } else {
+      throw new Error('Unsupported link format');
+    }
+
+    const messages = await client.getMessages(entity, { ids: [msgId] });
+    const base = messages?.[0];
+    if (!base) return null;
+    let caption = (base.message || base.text || '') || '';
+    const grouped = base.groupedId ? base.groupedId.toString() : null;
+
+    let candidates = [base];
+    if (grouped) {
+      const before = await client.getMessages(entity, { limit: 20, maxId: msgId, reverse: true });
+      const after = await client.getMessages(entity, { limit: 20, minId: msgId, reverse: true });
+      candidates = [...before, base, ...after];
+    }
+
+    const items = candidates
+      .filter(m => m && m.media)
+      .filter(m => !grouped || (m.groupedId && m.groupedId.toString() === grouped))
+      .map(m => {
+        if (m.media.className === 'MessageMediaPhoto') {
+          return { id: m.id, kind: 'photo' };
+        } else if (m.media.className === 'MessageMediaDocument') {
+          const doc = m.media.document;
+          if (!doc) return null;
+          const mt = (doc.mimeType || '').toLowerCase();
+          if (mt.startsWith('video/')) return { id: m.id, kind: 'video' };
+          if (mt.startsWith('image/')) return { id: m.id, kind: 'photo' };
+          return null;
+        }
+        return null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.id - b.id);
+
+    const channelId = (entity && entity.id && entity.id.toString) ? entity.id.toString() : String(entity?.id || '');
+    
+    // If caption is empty for grouped albums, try to find it from:
+    // 1) any message within the same media group that carries a caption
+    // 2) the next immediate text message after the group (common pattern in channels)
+    // 3) the previous text message before the group (fallback)
+    if ((!caption || !caption.trim()) && grouped) {
+      try {
+        const groupIds = candidates
+          .filter(m => m && m.groupedId && m.groupedId.toString() === grouped)
+          .map(m => m.id)
+          .sort((a, b) => a - b);
+        const minId = groupIds.length ? groupIds[0] : base.id;
+        const maxId = groupIds.length ? groupIds[groupIds.length - 1] : base.id;
+
+        // 1) caption attached to one of the group items
+        if (!caption || !caption.trim()) {
+          for (const m of candidates) {
+            if (m && m.groupedId && m.groupedId.toString() === grouped) {
+              const cap = (m.message || m.text || '').toString();
+              if (cap && cap.trim()) { caption = cap; break; }
+            }
+          }
+        }
+
+        // 2) next immediate text message after the group
+        if (!caption || !caption.trim()) {
+          const after = await client.getMessages(entity, { limit: 10, minId: maxId, reverse: true });
+          for (const m of after) {
+            if (m.id > maxId) {
+              const hasText = (m.message || m.text || '').toString().trim().length > 0;
+              const isPureText = !m.media || m.media.className === 'MessageMediaEmpty';
+              if (hasText && isPureText) { caption = (m.message || m.text).toString(); break; }
+            }
+          }
+        }
+
+        // 3) previous text message before the group
+        if (!caption || !caption.trim()) {
+          const before = await client.getMessages(entity, { limit: 10, maxId: minId, reverse: true });
+          // reverse to search nearest first
+          for (const m of before.slice().reverse()) {
+            if (m.id < minId) {
+              const hasText = (m.message || m.text || '').toString().trim().length > 0;
+              const isPureText = !m.media || m.media.className === 'MessageMediaEmpty';
+              if (hasText && isPureText) { caption = (m.message || m.text).toString(); break; }
+            }
+          }
+        }
+      } catch (_) { /* best effort */ }
+    }
+
+    return { channelId, items, caption };
+  }
+
+  // Try to extract a private invite link (joinchat or +code) from a message link
+  // Returns { link } or null
+  async extractInviteLinkFromMessageLink(sessionId, link) {
+    await this.ensureInitialized();
+    let sessionData = this.sessions.get(sessionId);
+    if (!sessionData) sessionData = await this.restoreSession(sessionId);
+    if (!sessionData || !sessionData.authenticated) {
+      throw new Error('User not authenticated');
+    }
+
+    const { client } = sessionData;
+    const m1 = link.match(/https?:\/\/t\.me\/c\/(\d+)\/(\d+)/i);
+    const m2 = link.match(/https?:\/\/t\.me\/([A-Za-z0-9_]{4,})\/(\d+)/i);
+    let entity; let msgId;
+    if (m1) {
+      msgId = parseInt(m1[2], 10);
+      const fullId = BigInt(`-100${m1[1]}`);
+      try { entity = await client.getEntity(fullId); } catch (_) { await client.getDialogs(); entity = await client.getEntity(fullId); }
+    } else if (m2) {
+      msgId = parseInt(m2[2], 10);
+      try { entity = await client.getEntity(m2[1]); } catch (_) { await client.getDialogs(); entity = await client.getEntity(m2[1]); }
+    } else {
+      return null; // not a message link
+    }
+
+    const messages = await client.getMessages(entity, { ids: [msgId] });
+    const message = messages?.[0];
+    if (!message) return null;
+    const text = (message.message || message.text || '').toString();
+    if (!text) return null;
+    // Match invite links: t.me/+code, telegram.me/+code, t.me/joinchat/code, tg://join?invite=code
+    const patterns = [
+      /https?:\/\/(?:t|telegram)\.me\/\+([A-Za-z0-9_-]+)/i,
+      /https?:\/\/(?:t|telegram)\.me\/joinchat\/([A-Za-z0-9_-]+)/i,
+      /tg:\/\/join\?invite=([A-Za-z0-9_-]+)/i
+    ];
+    for (const re of patterns) {
+      const m = text.match(re);
+      if (m && m[1]) {
+        // Normalize to https://t.me/+code
+        const code = m[1];
+        const normalized = text.includes('joinchat') ? `https://t.me/joinchat/${code}` : `https://t.me/+${code}`;
+        return { link: normalized, raw: m[0], text };
+      }
+    }
     return null;
   }
 
@@ -2097,45 +2396,78 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
           throw new Error('Message or media not found');
         }
 
-        const fileAttr = message.media.document?.attributes?.find(
-          attr => attr.className === 'DocumentAttributeFilename'
-        );
+        const doc = message.media.document;
+        const fileAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeFilename');
+        const videoAttr = doc?.attributes?.find(a => a.className === 'DocumentAttributeVideo');
         const fileName = path.basename(targetPath);
-        
+
         // Ensure target directory exists
         const targetDir = path.dirname(targetPath);
         await fsExtra.ensureDir(targetDir);
-        
-        console.log(`Download to path attempt ${attempt + 1}/${maxRetries} for ${fileName}`);
-        
-        const workers = parseInt(process.env.TG_DL_WORKERS || process.env.DOWNLOAD_WORKERS || '4', 10);
-        const partSizeKB = parseInt(process.env.TG_DL_PART_SIZE_KB || process.env.DOWNLOAD_PART_SIZE_KB || '512', 10);
-        const buffer = await client.downloadMedia(message.media, {
-          progressCallback: (received, total) => {
-            const progress = (received / total) * 100;
-            if (progressCallback) {
-              const shouldContinue = progressCallback(progress, received, total);
-              // If progressCallback returns false, abort the download
-              if (shouldContinue === false) {
-                throw new Error('Download cancelled by user');
-              }
-            }
-          },
-          workers,
-          partSizeKB
-        });
 
-        await fsExtra.writeFile(targetPath, buffer);
-        
-        console.log(`Download to path successful for ${fileName} on attempt ${attempt + 1}`);
-        
-        return {
-          fileName,
-          filePath: targetPath,
-          size: buffer.length,
-          success: true
-        };
-        
+        console.log(`Download to path attempt ${attempt + 1}/${maxRetries} for ${fileName}`);
+
+        // Prefer robust streaming via iterDownload with explicit dcId to avoid
+        // "File lives in another DC" stalls when current session is on a different DC.
+        // If it fails for any reason, fall back to downloadMedia (buffer) path.
+        let wrote = false;
+        try {
+          const requestSize = (parseInt(process.env.TG_DL_PART_SIZE_KB || process.env.DOWNLOAD_PART_SIZE_KB || '256', 10)) * 1024;
+          const totalSize = (doc.size && typeof doc.size.toNumber === 'function') ? doc.size.toNumber() : (doc.size || 0);
+          const fileLocation = new Api.InputDocumentFileLocation({
+            id: doc.id,
+            accessHash: doc.accessHash,
+            fileReference: doc.fileReference,
+            thumbSize: ''
+          });
+          const ws = fs.createWriteStream(targetPath);
+          let received = 0;
+          const iter = client.iterDownload({ file: fileLocation, requestSize, dcId: doc.dcId, fileSize: doc.size });
+          for await (const chunk of iter) {
+            received += chunk.length;
+            if (progressCallback) {
+              const cont = progressCallback(received, totalSize);
+              if (cont === false) { try { ws.destroy(); } catch (_) {}; throw new Error('Download cancelled by user'); }
+            }
+            if (!ws.write(chunk)) await new Promise(res => ws.once('drain', res));
+          }
+          await new Promise(res => ws.end(res));
+          wrote = true;
+        } catch (streamErr) {
+          // Fallback to classic buffer download
+          try {
+            const workers = parseInt(process.env.TG_DL_WORKERS || process.env.DOWNLOAD_WORKERS || '4', 10);
+            const partSizeKB = parseInt(process.env.TG_DL_PART_SIZE_KB || process.env.DOWNLOAD_PART_SIZE_KB || '512', 10);
+            const buffer = await client.downloadMedia(message.media, {
+              progressCallback: (received, total) => {
+                const progress = total ? (received / total) * 100 : 0;
+                if (progressCallback) {
+                  const shouldContinue = progressCallback(progress, received, total);
+                  if (shouldContinue === false) throw new Error('Download cancelled by user');
+                }
+              },
+              workers,
+              partSizeKB
+            });
+            await fsExtra.writeFile(targetPath, buffer);
+            wrote = true;
+          } catch (inner) {
+            // rethrow outer to be handled by retry loop
+            throw streamErr || inner;
+          }
+        }
+
+        if (wrote) {
+          const sizeStat = await fsExtra.stat(targetPath).catch(() => null);
+          const size = sizeStat?.size || ((doc.size && typeof doc.size.toNumber === 'function') ? doc.size.toNumber() : (doc.size || 0));
+          console.log(`Download to path successful for ${fileName} on attempt ${attempt + 1}`);
+          // Include basic meta to help proper previews when re-uploading via Bot API
+          const duration = (videoAttr && typeof videoAttr.duration === 'number') ? videoAttr.duration : undefined;
+          const width = (videoAttr && typeof videoAttr.w === 'number') ? videoAttr.w : undefined;
+          const height = (videoAttr && typeof videoAttr.h === 'number') ? videoAttr.h : undefined;
+          return { fileName, filePath: targetPath, size, duration, width, height, success: true };
+        }
+
       } catch (error) {
         lastError = error;
         console.error(`Download to path attempt ${attempt + 1}/${maxRetries} failed:`, error.message);
@@ -2146,7 +2478,7 @@ if (sessionData && sessionData.lastAuthError) { const e = new Error(sessionData.
           error.message.includes('FILE_REFERENCE_INVALID') ||
           error.message.includes('FILE_ID_INVALID')
         );
-        
+
         if (!isRetriableError || attempt === maxRetries - 1) {
           // If it's not a retriable error or we've exhausted all retries, throw the error
           break;

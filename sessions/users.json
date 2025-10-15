@@ -3,36 +3,72 @@
     "userId": "7506500905",
     "plan": "svip",
     "dailyLimit": 100,
-    "dailyUsed": 2,
-    "dailyResetAt": 1759593600000,
-    "bigFileCredits": 4999,
-    "maxFileBytes": 4294967296,
+    "dailyUsed": 1,
+    "dailyResetAt": 1760457600000,
+    "bigFileCredits": 2998,
+    "maxFileBytes": 2097152000,
     "allowPrivate": true,
     "createdAt": 1759641912300,
-    "updatedAt": 1759658355165
+    "updatedAt": 1760498487559
   },
   "7650869672": {
     "userId": "7650869672",
     "plan": "svip",
     "dailyLimit": 100,
-    "dailyUsed": 7,
-    "dailyResetAt": 1759680000000,
-    "bigFileCredits": 4996,
-    "maxFileBytes": 4294967296,
+    "dailyUsed": 0,
+    "dailyResetAt": 1760371200000,
+    "bigFileCredits": 3000,
+    "maxFileBytes": 2097152000,
     "allowPrivate": true,
     "createdAt": 1759641912300,
-    "updatedAt": 1759703867779
+    "updatedAt": 1760295741943
   },
   "8141884827": {
     "userId": "8141884827",
     "plan": "svip",
     "dailyLimit": 100,
-    "dailyUsed": 31,
-    "dailyResetAt": 1759852800000,
-    "bigFileCredits": 4979,
-    "maxFileBytes": 4294967296,
+    "dailyUsed": 4,
+    "dailyResetAt": 1760371200000,
+    "bigFileCredits": 2999,
+    "maxFileBytes": 2097152000,
     "allowPrivate": true,
     "createdAt": 1759641912300,
-    "updatedAt": 1759907425135
+    "updatedAt": 1760418706392
+  },
+  "8053610901": {
+    "userId": "8053610901",
+    "plan": "free",
+    "dailyLimit": 1,
+    "dailyUsed": 1,
+    "dailyResetAt": 1760198400000,
+    "bigFileCredits": 0,
+    "maxFileBytes": null,
+    "allowPrivate": false,
+    "createdAt": 1760250889046,
+    "updatedAt": 1760250889046
+  },
+  "8494869260": {
+    "userId": "8494869260",
+    "plan": "free",
+    "dailyLimit": 1,
+    "dailyUsed": 0,
+    "dailyResetAt": 1760284800000,
+    "bigFileCredits": 0,
+    "maxFileBytes": null,
+    "allowPrivate": false,
+    "createdAt": 1760293982665,
+    "updatedAt": 1760297780228
+  },
+  "-1003146747117": {
+    "userId": "-1003146747117",
+    "plan": "free",
+    "dailyLimit": 1,
+    "dailyUsed": 0,
+    "dailyResetAt": 1760371200000,
+    "bigFileCredits": 0,
+    "maxFileBytes": null,
+    "allowPrivate": false,
+    "createdAt": 1760414330951,
+    "updatedAt": 1760414330951
   }
 }

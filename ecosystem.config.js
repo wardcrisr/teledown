@@ -6,14 +6,15 @@ module.exports = {
       cwd: "/root/teledown",
       exec_mode: "fork",
       instances: 1,
-      max_memory_restart: "200M",
+      max_memory_restart: "1G",
+      kill_timeout: 15000,
       restart_delay: 2000,
       autorestart: true,
 
       out_file: "/root/teledown/logs/teledown-out.log",
       error_file: "/root/teledown/logs/teledown-error.log",
       // 直接显示本地(Asia/Shanghai)时间，不附加偏移字符串
-      log_date_format: "YYYY-MM-DD HH:mm:ss",
+      log_date_format: "YYYY-MM-DD HH:mm Z",
 
       env: {
         NODE_ENV: "production",
@@ -42,7 +43,14 @@ module.exports = {
         BOT_FAST_START: "1",
         // Eager start: don't block on meta fetch & limits before starting
         BOT_EAGER_START: "1",
-        BOT_PROGRESS_DEBUG: "1",
+        BOT_PROGRESS_DEBUG: "0",
+        DL_DEBUG: "1",
+        // Hide noisy logs like [SBX]/[PROG]/[QUEUE]/[EDIT]
+        DL_HIDE_NOISY: "1",
+        // Or hide only [SBX] logs (optional, can be 0/1)
+        DL_HIDE_SBX: "1",
+        // Watchdog idle time before considering a download stalled (ms)
+        WATCHDOG_IDLE_MS: "300000",
         // Parallel chunk download tuning
         TG_DL_WORKERS: "8",
         TG_DL_PART_SIZE_KB: "1024",
